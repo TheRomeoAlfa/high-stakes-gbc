@@ -35,7 +35,7 @@ typedef struct {
     uint8_t w;          // output waveform after instrument mapping
     uint8_t env;        // custom instrument envelope / arp id
     int16_t pbase;      // pitch*16 incl. instrument offset
-    int32_t pacc, pstep;
+    int16_t pacc, pstep;   // pitch ramp in 12.4 fixed point (pitch*16*16 fits 16 bits)
     uint16_t vacc;      // volume 8.8
     int16_t vstep;
     int16_t arp[4];
@@ -81,8 +81,11 @@ static void voice_start(uint8_t v, uint8_t n) {
     p->nd = (uint8_t)(p->dur >> 8);
     if (!p->nd) p->nd = 1;
     p->last = 0;
-    for (i = 0; i < 32; i++)
-        if (p->s[i * 2 + 1] & 0x0E) p->last = i;
+    {
+        const uint8_t *hi = p->s + 1;
+        for (i = 0; i < 32; i++, hi += 2)
+            if (*hi & 0x0E) p->last = i;
+    }
     p->vol = 0;
     p->pitch = 0;
     p->et = 0;
@@ -175,6 +178,14 @@ static const int8_t cust_off[8] = {-12, 24, 0, 0, 0, 0, 24, 0};
 static const uint8_t cust_w[8] = {1, 6, 5, 3, 0, 5, 2, 3};
 static const uint8_t c6_env[12] = {16, 15, 13, 12, 11, 9, 8, 7, 5, 4, 3, 1};
 
+// (v << 8) / nd without a division: recip_tab[nd-1] = 65536 / nd
+static int16_t vol_step(int8_t v, uint8_t nd) {
+    uint16_t r = recip_tab[nd - 1] >> 4;
+    uint16_t m = (uint16_t)(v < 0 ? -v : v) * r;
+    int16_t st = (int16_t)(m >> 4);
+    return v < 0 ? -st : st;
+}
+
 static void read_note(voice_t *p) {
     const uint8_t *d = p->s + p->idx * 2;
     uint8_t lo = d[0], hi = d[1];
@@ -211,10 +222,10 @@ static void read_note(voice_t *p) {
             int16_t pp = ((int16_t)opitch << 4) + off;
             pv15 = ovol * 2 + 1;
             p->mode = 1;
-            p->pacc = (int32_t)pp << 8;
-            p->pstep = ((int32_t)(p->pbase - pp) << 8) / nd;
+            p->pacc = pp << 4;
+            p->pstep = (int16_t)((p->pbase - pp) << 4) / (int16_t)nd;
             p->vacc = (uint16_t)pv15 << 8;
-            p->vstep = (int16_t)(((int16_t)v15 - pv15) << 8) / nd;
+            p->vstep = vol_step((int8_t)v15 - (int8_t)pv15, nd);
         }
         break;
     case 2:
@@ -222,15 +233,15 @@ static void read_note(voice_t *p) {
         break;
     case 3:
         p->mode = 1;
-        p->pacc = (int32_t)p->pbase << 8;
-        p->pstep = -((int32_t)p->pbase << 8) / nd;
+        p->pacc = p->pbase << 4;
+        p->pstep = -(int16_t)((p->pbase << 4) / (int16_t)nd);
         break;
     case 4:
         p->vacc = 0;
-        p->vstep = (int16_t)((uint16_t)v15 << 8) / nd;
+        p->vstep = vol_step(v15, nd);
         break;
     case 5:
-        p->vstep = -(int16_t)(((uint16_t)v15 << 8) / nd);
+        p->vstep = -vol_step(v15, nd);
         break;
     default: {  // 6, 7: arpeggio over this group of 4 notes
         uint8_t g = p->idx & ~3, k;
@@ -279,7 +290,7 @@ static void render(voice_t *p) {
     switch (p->mode) {
     case 1:
         p->pacc += p->pstep;
-        pitch = (int16_t)(p->pacc >> 8);
+        pitch = p->pacc >> 4;
         break;
     case 2:
         pitch = p->pbase + vib[p->t & 7];

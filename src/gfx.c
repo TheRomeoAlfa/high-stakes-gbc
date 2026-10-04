@@ -16,7 +16,7 @@ const uint16_t pico[16] = {
     RGB5(41, 173, 255), RGB5(131, 118, 156), RGB5(255, 119, 168), RGB5(255, 204, 170)};
 
 uint8_t cvbuf[160 * 16];
-uint8_t dlgbuf[64 * 16];
+uint8_t dlgbuf[80 * 16];
 
 static uint8_t *cb;
 static uint8_t cw, chh;   // canvas width/height in tiles
@@ -34,12 +34,49 @@ void cv_select(const canvas_t *c) {
     for (r = 0; r < chh && r < 18; r++, o += (uint16_t)cw << 4) rowbase[r] = o;
 }
 
+// RAM fill (GBDK's memset costs ~80 cycles/byte); fills fl_n bytes at fl_dst with fl_v
+static uint8_t *fl_dst;
+static uint16_t fl_n;
+static uint8_t fl_v;
+
+static void asm_fill(void) __naked {
+    __asm
+    ld  hl, #_fl_n
+    ld  a, (hl+)
+    ld  c, a
+    ld  b, (hl)
+    ld  hl, #_fl_dst
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  a, (_fl_v)
+    inc b
+    inc c
+    jr  2$
+1$:
+    ld  (hl+), a
+2$:
+    dec c
+    jr  nz, 1$
+    dec b
+    jr  nz, 1$
+    ret
+    __endasm;
+}
+
+static void fast_fill(uint8_t *dst, uint8_t v, uint16_t n) {
+    fl_dst = dst;
+    fl_v = v;
+    fl_n = n;
+    asm_fill();
+}
+
 void cv_begin(const canvas_t *c, uint8_t col) {
     uint16_t n;
     cv_select(c);
     n = (uint16_t)cw * chh * 16;
-    if (col == 0) memset(cb, 0, n);
-    else if (col == 3) memset(cb, 0xFF, n);
+    if (col == 0) fast_fill(cb, 0, n);
+    else if (col == 3) fast_fill(cb, 0xFF, n);
     else {
         uint8_t lo = (col & 1) ? 0xFF : 0, hi = (col & 2) ? 0xFF : 0;
         uint8_t *p = cb, *e = cb + n;
@@ -272,8 +309,12 @@ static void fast_blit(int16_t x, int16_t y, const uint8_t *rows, uint8_t n, uint
     asm_blit();
 }
 
+static const uint8_t lmask[8] = {0xFF, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01};
+static const uint8_t rmask[8] = {0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC, 0xFE, 0xFF};
+
 void cv_rect(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t col) {
-    uint8_t tx, tx0, tx1, m, lo, hi, ya;
+    uint8_t tx, tx0, tx1, m, lo, hi, ya, r0;
+    uint8_t *p;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 >= cpw) x1 = cpw - 1;
@@ -284,17 +325,19 @@ void cv_rect(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t col) {
     tx0 = (uint8_t)x0 >> 3;
     tx1 = (uint8_t)x1 >> 3;
     ya = (uint8_t)y0;
+    r0 = ya & 7;
     a_rows = (uint8_t)(y1 - y0 + 1);
     a_skip = ((uint16_t)cw << 4) - 16;
-    for (tx = tx0; tx <= tx1; tx++) {
+    p = cb + rowbase[ya >> 3] + ((uint16_t)tx0 << 4) + (r0 << 1);
+    for (tx = tx0; tx <= tx1; tx++, p += 16) {
         m = 0xFF;
-        if (tx == tx0) m &= 0xFF >> ((uint8_t)x0 & 7);
-        if (tx == tx1) m &= (uint8_t)(0xFF << (7 - ((uint8_t)x1 & 7)));
+        if (tx == tx0) m = lmask[(uint8_t)x0 & 7];
+        if (tx == tx1) m &= rmask[(uint8_t)x1 & 7];
         a_m = m;
         a_lom = lo & m;
         a_him = hi & m;
-        a_r0 = ya & 7;
-        a_p = cb + rowbase[ya >> 3] + ((uint16_t)tx << 4) + ((ya & 7) << 1);
+        a_r0 = r0;
+        a_p = p;
         asm_colfill();
     }
 }
@@ -321,9 +364,7 @@ void cv_rrect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t col) {
     cv_rect(x, y + 1, x + w - 1, y + h - 2, col);
 }
 
-static uint8_t glyph_w(uint8_t ch) {
-    return font_w[ch & 127];
-}
+#define glyph_w(ch) (font_w[(uint8_t)(ch) & 127])
 
 uint8_t text_w(const char *s) {
     uint8_t w = 0;
@@ -342,7 +383,7 @@ int16_t cv_putc(char ch, int16_t x, int16_t y, uint8_t col) {
 int16_t cv_print(const char *s, int16_t x, int16_t y, uint8_t col) {
     int16_t x0 = x;
     uint8_t *base = 0;
-    uint8_t fast = 0, tx;
+    uint8_t fast = 0, tx, xx, w, c, r0 = 0, cpw8 = (uint8_t)cpw;
     char ch;
     while ((ch = *s++)) {
         if (ch == '\n') {
@@ -351,28 +392,32 @@ int16_t cv_print(const char *s, int16_t x, int16_t y, uint8_t col) {
             fast = 0;
             continue;
         }
+        c = (uint8_t)ch & 127;
+        w = font_w[c];
         if (!fast) {
             fast = 2;
             if (y >= 0 && y + 5 <= cph) {
                 fast = 1;
-                base = cb + rowbase[(uint8_t)y >> 3] + (((uint8_t)y & 7) << 1);
+                r0 = (uint8_t)y & 7;
+                base = cb + rowbase[(uint8_t)y >> 3] + (r0 << 1);
                 a_col = col;
                 a_skip = ((uint16_t)cw << 4) - 16;
             }
         }
-        if (fast == 1 && x >= 0 && x < cpw) {
-            tx = (uint8_t)x >> 3;
-            a_g = font_rows + (uint8_t)(ch & 127) * 5;
+        // 8-bit fast path while the glyph starts inside the canvas
+        if (fast == 1 && !((uint16_t)x >> 8) && (xx = (uint8_t)x) < cpw8) {
+            tx = xx >> 3;
+            a_g = font_rows + ((uint16_t)c << 2) + c;
             a_rows = 5;
-            a_sh = (uint8_t)x & 7;
-            a_two = (uint8_t)(tx + 1) < cw && a_sh + glyph_w(ch) > 9;
-            a_r0 = (uint8_t)y & 7;
+            a_sh = xx & 7;
+            a_two = (uint8_t)(tx + 1) < cw && (uint8_t)(a_sh + w) > 9;
+            a_r0 = r0;
             a_p = base + ((uint16_t)tx << 4);
             asm_blit();
         } else {
             cv_putc(ch, x, y, col);
         }
-        x += glyph_w(ch);
+        x += w;
     }
     return x;
 }
@@ -402,33 +447,16 @@ uint8_t bignum_w(const char *s) {
     return w - 2;
 }
 
-static uint8_t rev8(uint8_t v) {
-    v = (v >> 4) | (v << 4);
-    v = ((v & 0xCC) >> 2) | ((v & 0x33) << 2);
-    return ((v & 0xAA) >> 1) | ((v & 0x55) << 1);
-}
-
 void cv_bignum(const char *s, int16_t x, int16_t y, uint8_t col) {
     int8_t i, k;
-    uint8_t r, w;
-    uint16_t bits;
-    const uint16_t *g;
+    uint8_t w;
     for (; *s; s++) {
         i = big_idx(*s);
         if (i >= 0) {
-            g = big_rows + i * 10;
             w = big_w[i];
             k = (int8_t)big_kern[i];
-            {
-                static uint8_t lrow[10], rrow[10];
-                for (r = 0; r < 10; r++) {
-                    bits = g[r];
-                    lrow[r] = rev8((uint8_t)bits);
-                    rrow[r] = rev8((uint8_t)(bits >> 8));
-                }
-                fast_blit(x + k, y, lrow, 10, col);
-                if (w > 8) fast_blit(x + k + 8, y, rrow, 10, col);
-            }
+            fast_blit(x + k, y, big_l + i * 10, 10, col);
+            if (w > 8) fast_blit(x + k + 8, y, big_r + i * 10, 10, col);
             x += w + k * 2 + 2;
         } else if (*s == '-') {
             cv_rect(x, y + 4, x + 3, y + 5, col);
@@ -449,28 +477,215 @@ uint16_t cv_tile_at(int16_t x, int16_t y) {
     return (uint16_t)((uint8_t)y >> 3) * cw + ((uint8_t)x >> 3);
 }
 
+
+// ---- fast VRAM access. VRAM is only blocked in mode 3; once STAT shows mode 0/1
+// the following mode 2 (80 dots) guarantees time for 4 more writes, so we test
+// STAT once per 4 bytes (interrupts masked so an ISR can't delay the writes).
+static uint8_t *vc_dst;
+static const uint8_t *vc_src;
+static uint16_t vc_n;   // number of 4-byte groups
+static uint8_t vc_val;
+
+static void asm_vram_copy(void) __naked {
+    __asm
+    ld  hl, #_vc_src
+    ld  a, (hl+)
+    ld  e, a
+    ld  d, (hl)
+    ld  hl, #_vc_n
+    ld  a, (hl+)
+    ld  c, a
+    ld  b, (hl)
+    ld  hl, #_vc_dst
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    inc b
+    inc c
+    jr  3$
+1$:
+    di
+2$:
+    ldh a, (_STAT_REG + 0)
+    and a, #2
+    jr  nz, 2$
+    ld  a, (de)
+    ld  (hl+), a
+    inc de
+    ld  a, (de)
+    ld  (hl+), a
+    inc de
+    ld  a, (de)
+    ld  (hl+), a
+    inc de
+    ld  a, (de)
+    ld  (hl+), a
+    inc de
+    ei
+3$:
+    dec c
+    jr  nz, 1$
+    dec b
+    jr  nz, 1$
+    ret
+    __endasm;
+}
+
+static void asm_vram_fill(void) __naked {
+    __asm
+    ld  a, (_vc_val)
+    ld  e, a
+    ld  hl, #_vc_n
+    ld  a, (hl+)
+    ld  c, a
+    ld  b, (hl)
+    ld  hl, #_vc_dst
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    inc b
+    inc c
+    jr  3$
+1$:
+    di
+2$:
+    ldh a, (_STAT_REG + 0)
+    and a, #2
+    jr  nz, 2$
+    ld  a, e
+    ld  (hl+), a
+    ld  (hl+), a
+    ld  (hl+), a
+    ld  (hl+), a
+    ei
+3$:
+    dec c
+    jr  nz, 1$
+    dec b
+    jr  nz, 1$
+    ret
+    __endasm;
+}
+
+// BG/window tile index -> VRAM address (LCDC.4 = 0: tiles 0-127 at 0x9000, 128-255 at 0x8800)
+static uint8_t *bg_tile_addr(uint8_t t) {
+    return (uint8_t *)((t < 128 ? 0x9000u : 0x8000u) + ((uint16_t)t << 4));
+}
+
+void vram_copy(uint8_t *dst, const uint8_t *src, uint16_t len) {
+    uint8_t r = len & 3;
+    vc_dst = dst;
+    vc_src = src;
+    vc_n = len >> 2;
+    if (vc_n) asm_vram_copy();
+    dst += len - r;
+    src += len - r;
+    while (r--) {
+        CRITICAL {
+            while (STAT_REG & 2);   // wait for mode 0/1
+            *dst++ = *src++;
+        }
+    }
+}
+
+void vram_fill(uint8_t *dst, uint8_t v, uint16_t len) {
+    uint8_t r = len & 3;
+    vc_dst = dst;
+    vc_val = v;
+    vc_n = len >> 2;
+    if (vc_n) asm_vram_fill();
+    dst += len - r;
+    while (r--) {
+        CRITICAL {
+            while (STAT_REG & 2);   // wait for mode 0/1
+            *dst++ = v;
+        }
+    }
+}
+
+// tile map row helpers (current VBK bank): BG map 0x9800, window map 0x9C00
+static uint8_t *map_addr(uint8_t win, uint8_t x, uint8_t y) {
+    return (uint8_t *)((win ? 0x9C00u : 0x9800u) + ((uint16_t)y << 5) + x);
+}
+
+// upload n BG tiles; a run that crosses tile 127 -> 128 wraps from 0x97F0 to 0x8800
+void bkg_tiles_upload(uint8_t first, uint16_t n, const uint8_t *src) {
+    while (n) {
+        uint16_t run = first < 128 ? 128 - first : 256 - first;
+        if (run > n) run = n;
+        vram_copy(bg_tile_addr(first), src, run << 4);
+        src += run << 4;
+        first += (uint8_t)run;
+        n -= run;
+    }
+}
+
 void cv_flush(const canvas_t *c) {
     VBK_REG = c->bank;
-    set_bkg_data(c->tile, c->w * c->h, c->buf);
+    bkg_tiles_upload(c->tile, (uint16_t)c->w * c->h, c->buf);
     VBK_REG = 0;
 }
 
 void cv_flush_tile(const canvas_t *c, uint16_t i) {
     VBK_REG = c->bank;
-    set_bkg_data(c->tile + i, 1, c->buf + i * 16);
+    vram_copy(bg_tile_addr(c->tile + i), c->buf + i * 16, 16);
     VBK_REG = 0;
 }
 
 static uint8_t rowbuf[32];
 
+// map/attribute placement is cached per first tile, so redraws only upload pixels
+static uint16_t placed[256];
+static uint8_t placed_gen[256], cur_gen = 1;
+
+static void place_attrs(const canvas_t *c);
+
 void cv_place(const canvas_t *c) {
+    uint8_t r, i, t = c->tile;
+    uint16_t key = 0x8000u | c->x | ((uint16_t)c->y << 5) | ((uint16_t)c->win << 10) | ((uint16_t)c->pal << 11);
+    if (placed_gen[t] == cur_gen && placed[t] == key) return;
+    placed[t] = key;
+    placed_gen[t] = cur_gen;
+    for (r = 0; r < c->h; r++) {
+        for (i = 0; i < c->w; i++) rowbuf[i] = t++;
+        vram_copy(map_addr(c->win, c->x, c->y + r), rowbuf, c->w);
+    }
+    place_attrs(c);
+}
+
+// upload n tile rows of a canvas starting at row r0
+void cv_flush_rows(const canvas_t *c, uint8_t r0, uint8_t n) {
+    uint16_t first = (uint16_t)r0 * c->w;
+    VBK_REG = c->bank;
+    bkg_tiles_upload(c->tile + (uint8_t)first, (uint16_t)c->w * n, c->buf + (first << 4));
+    VBK_REG = 0;
+}
+
+// write only the canvas tile indices into the map (no cache, attributes untouched);
+// used to swap between pre-rendered variants of the same box
+void cv_place_tiles(const canvas_t *c) {
     uint8_t r, i, t = c->tile;
     for (r = 0; r < c->h; r++) {
         for (i = 0; i < c->w; i++) rowbuf[i] = t++;
-        if (c->win) set_win_tiles(c->x, c->y + r, c->w, 1, rowbuf);
-        else set_bkg_tiles(c->x, c->y + r, c->w, 1, rowbuf);
+        vram_copy(map_addr(c->win, c->x, c->y + r), rowbuf, c->w);
     }
-    map_fill(c->win | 0x80, c->x, c->y, c->w, c->h, 0, c->pal | (c->bank ? 8 : 0));
+}
+
+void cv_place_attrs(const canvas_t *c) {
+    place_attrs(c);
+}
+
+// fill tile indices only (attributes untouched, placement cache untouched)
+void map_tiles(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t tile) {
+    uint8_t r;
+    for (r = 0; r < h; r++) vram_fill(map_addr(win, x, y + r), tile, w);
+}
+
+void cv_invalidate(void) {
+    if (++cur_gen == 0) {   // wrapped: really clear
+        memset(placed_gen, 0, sizeof(placed_gen));
+        cur_gen = 1;
+    }
 }
 
 void cv_draw(const canvas_t *c) {
@@ -478,38 +693,41 @@ void cv_draw(const canvas_t *c) {
     cv_place(c);
 }
 
+static void attr_rows(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t attr) {
+    uint8_t r;
+    VBK_REG = 1;
+    for (r = 0; r < h; r++) vram_fill(map_addr(win, x, y + r), attr, w);
+    VBK_REG = 0;
+}
+
+static void place_attrs(const canvas_t *c) {
+    attr_rows(c->win, c->x, c->y, c->w, c->h, c->pal | (c->bank ? 8 : 0));
+}
+
 // win bit7 set = attributes only
 void map_fill(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t tile, uint8_t attr) {
-    uint8_t r, i;
-    for (i = 0; i < w; i++) rowbuf[i] = attr;
+    uint8_t r, wn = win & 1;
+    if (!(win & 0x80)) cv_invalidate();   // may have covered placed canvases
     VBK_REG = 1;
-    for (r = 0; r < h; r++) {
-        if (win & 1) set_win_tiles(x, y + r, w, 1, rowbuf);
-        else set_bkg_tiles(x, y + r, w, 1, rowbuf);
-    }
+    for (r = 0; r < h; r++) vram_fill(map_addr(wn, x, y + r), attr, w);
     VBK_REG = 0;
     if (win & 0x80) return;
-    for (i = 0; i < w; i++) rowbuf[i] = tile;
-    for (r = 0; r < h; r++) {
-        if (win & 1) set_win_tiles(x, y + r, w, 1, rowbuf);
-        else set_bkg_tiles(x, y + r, w, 1, rowbuf);
-    }
+    for (r = 0; r < h; r++) vram_fill(map_addr(wn, x, y + r), tile, w);
 }
 
 void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs) {
+    uint8_t r;
     VBK_REG = 1;
-    if (win) set_win_tiles(x, y, w, h, attrs);
-    else set_bkg_tiles(x, y, w, h, attrs);
+    for (r = 0; r < h; r++, attrs += w) vram_copy(map_addr(win, x, y + r), attrs, w);
     VBK_REG = 0;
-    if (win) set_win_tiles(x, y, w, h, tiles);
-    else set_bkg_tiles(x, y, w, h, tiles);
+    for (r = 0; r < h; r++, tiles += w) vram_copy(map_addr(win, x, y + r), tiles, w);
 }
 
 void load_bkg_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank) {
     uint8_t save = _current_bank;
     SWITCH_ROM(rombank);
     VBK_REG = vbank;
-    set_bkg_data(first, n, src);
+    bkg_tiles_upload(first, n, src);
     VBK_REG = 0;
     SWITCH_ROM(save);
 }
@@ -518,7 +736,7 @@ void load_spr_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t
     uint8_t save = _current_bank;
     SWITCH_ROM(rombank);
     VBK_REG = vbank;
-    set_sprite_data(first, n, src);
+    vram_copy((uint8_t *)0x8000u + ((uint16_t)first << 4), src, (uint16_t)n << 4);
     VBK_REG = 0;
     SWITCH_ROM(save);
 }
@@ -569,26 +787,120 @@ void copy_objpals(uint8_t first, uint8_t n, const uint16_t *src) {
 }
 
 static uint16_t tmppal[32];
-static uint8_t scale[32];
+static const uint8_t *scale;
+
+// fade_tab[k][c] = c * k^2 / 625 (quadratic falloff, close to PICO-8's fade table),
+// precomputed; fade_conv scales 32 RGB555 colours from vc_src into vc_dst.
+static uint8_t *fd_out;
+static uint8_t fd_cnt, fd_r, fd_g;
+
+static void asm_fade(void) __naked {
+    __asm
+    ld  hl, #_vc_src
+    ld  a, (hl+)
+    ld  e, a
+    ld  d, (hl)
+    ld  hl, #_vc_dst
+    ld  a, (hl+)
+    ld  (_fd_out), a
+    ld  a, (hl)
+    ld  (_fd_out + 1), a
+    ld  a, #32
+    ld  (_fd_cnt), a
+1$:
+    ld  a, (de)
+    inc de
+    ld  b, a
+    ld  a, (de)
+    inc de
+    ld  c, a
+    push de
+    ld  a, b
+    and a, #31
+    call 10$
+    ld  (_fd_r), a
+    ld  a, c
+    and a, #3
+    add a, a
+    add a, a
+    add a, a
+    ld  d, a
+    ld  a, b
+    swap a
+    rrca
+    and a, #7
+    or  a, d
+    call 10$
+    ld  (_fd_g), a
+    ld  a, c
+    rrca
+    rrca
+    and a, #31
+    call 10$
+    add a, a
+    add a, a
+    ld  e, a
+    ld  a, (_fd_g)
+    rrca
+    rrca
+    rrca
+    and a, #3
+    or  a, e
+    ld  e, a
+    ld  a, (_fd_g)
+    swap a
+    add a, a
+    and a, #0xE0
+    ld  d, a
+    ld  a, (_fd_r)
+    or  a, d
+    ld  d, a
+    ld  hl, #_fd_out
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  (hl), d
+    inc hl
+    ld  (hl), e
+    inc hl
+    ld  a, l
+    ld  (_fd_out), a
+    ld  a, h
+    ld  (_fd_out + 1), a
+    pop de
+    ld  hl, #_fd_cnt
+    dec (hl)
+    jr  nz, 1$
+    ret
+10$:
+    push af
+    ld  hl, #_scale
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    pop af
+    add a, l
+    ld  l, a
+    ld  a, h
+    adc a, #0
+    ld  h, a
+    ld  a, (hl)
+    ret
+    __endasm;
+}
 
 static void fade_conv(const uint16_t *src) {
-    uint8_t i;
-    uint16_t c;
-    for (i = 0; i < 32; i++) {
-        c = src[i];
-        tmppal[i] = scale[c & 31] | ((uint16_t)scale[(c >> 5) & 31] << 5) | ((uint16_t)scale[(c >> 10) & 31] << 10);
-    }
+    vc_src = (const uint8_t *)src;
+    vc_dst = (uint8_t *)tmppal;
+    asm_fade();
 }
 
 static void pal_apply(void) {
-    uint8_t i;
     if (fadelvl == 0) {
         set_bkg_palette(0, 8, bgpal);
         set_sprite_palette(0, 8, objpal);
     } else {
-        uint8_t k = 25 - fadelvl;
-        // quadratic falloff looks closer to PICO-8's fade table
-        for (i = 0; i < 32; i++) scale[i] = (uint8_t)(((uint16_t)i * k * k) / 625);
+        scale = fade_tab + (uint8_t)(25 - fadelvl) * 32;
         fade_conv(bgpal);
         set_bkg_palette(0, 8, tmppal);
         fade_conv(objpal);
@@ -599,17 +911,92 @@ static void pal_apply(void) {
 // ---------------------------------------------------------------- sprites
 int8_t cam_x, cam_y;
 uint8_t win_cut;
-static uint8_t nspr;
+static uint8_t nspr, nspr_prev;
+static uint8_t *oam_p = (uint8_t *)shadow_OAM;
 
-void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop) {
-    x += cam_x;
-    y += cam_y;
-    if (nspr >= 40 || x <= -8 || x >= 168 || y <= -16 || y >= 160) return;
-    if (win_cut && y + 16 > win_cut && y < 112) return;
-    set_sprite_tile(nspr, tile);
-    set_sprite_prop(nspr, prop);
-    move_sprite(nspr, (uint8_t)(x + 8), (uint8_t)(y + 16));
-    nspr++;
+// writes straight into shadow OAM; sprites are hidden again only if unused this frame.
+// SDCC sm83 convention: DE = x, BC = y, tile and prop are bytes on the stack (callee pops).
+void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop) __naked {
+    (void)x; (void)y; (void)tile; (void)prop;
+    __asm
+    ld  a, (_nspr)
+    cp  a, #40
+    jr  nc, 9$
+    ; sx = x + cam_x + 8, valid 1..167
+    ld  a, (_cam_x)
+    ld  l, a
+    rlca
+    sbc a, a
+    ld  h, a
+    add hl, de
+    ld  de, #8
+    add hl, de
+    ld  a, h
+    or  a, a
+    jr  nz, 9$
+    ld  a, l
+    or  a, a
+    jr  z, 9$
+    cp  a, #168
+    jr  nc, 9$
+    ld  e, l
+    ; sy = y + cam_y + 16, valid 1..159
+    ld  a, (_cam_y)
+    ld  l, a
+    rlca
+    sbc a, a
+    ld  h, a
+    add hl, bc
+    ld  bc, #16
+    add hl, bc
+    ld  a, h
+    or  a, a
+    jr  nz, 9$
+    ld  a, l
+    or  a, a
+    jr  z, 9$
+    cp  a, #160
+    jr  nc, 9$
+    ld  d, l
+    ; hidden under the score panel window?
+    ld  a, (_win_cut)
+    or  a, a
+    jr  z, 5$
+    ld  b, a
+    ld  a, d
+    cp  a, b
+    jr  c, 5$
+    jr  z, 5$
+    cp  a, #128
+    jr  c, 9$
+5$:
+    ldhl sp, #2
+    ld  a, (hl+)
+    ld  b, a
+    ld  c, (hl)
+    ld  hl, #_oam_p
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  a, d
+    ld  (hl+), a
+    ld  a, e
+    ld  (hl+), a
+    ld  a, b
+    ld  (hl+), a
+    ld  a, c
+    ld  (hl+), a
+    ld  a, l
+    ld  (_oam_p), a
+    ld  a, h
+    ld  (_oam_p + 1), a
+    ld  hl, #_nspr
+    inc (hl)
+9$:
+    pop hl
+    pop af
+    jp  (hl)
+    __endasm;
 }
 
 void spr_put16(int16_t x, int16_t y, uint8_t tile, uint8_t prop) {
@@ -623,13 +1010,18 @@ void spr_put16(int16_t x, int16_t y, uint8_t tile, uint8_t prop) {
 }
 
 void spr_end(void) {
-    uint8_t i;
-    for (i = nspr; i < 40; i++) move_sprite(i, 0, 0);
+    uint8_t i = nspr, *o = oam_p;
+    for (; i < nspr_prev; i++, o += 4) *o = 0;
+    nspr_prev = nspr;
     nspr = 0;
+    oam_p = (uint8_t *)shadow_OAM;
 }
 
 // ---------------------------------------------------------------- frame loop
 uint8_t frames;
+#ifdef DEBUG_FPS
+uint16_t dbg_loops;
+#endif
 uint8_t joy, joyp;
 uint8_t scx, scy;
 extern volatile uint8_t joy_latch;
@@ -654,6 +1046,9 @@ void frame(void) {
         SWITCH_ROM(save);
     }
     frames++;
+#ifdef DEBUG_FPS
+    dbg_loops++;
+#endif
     CRITICAL {
         joyp = joy_latch;
         joy_latch = 0;
@@ -692,12 +1087,14 @@ void screen_on(void) {
 }
 
 void clear_bg(void) {
+    cv_invalidate();
+    // rows 0-17 of both maps are contiguous 32-byte rows
     VBK_REG = 1;
-    fill_bkg_rect(0, 0, 32, 18, 0);
-    fill_win_rect(0, 0, 20, 18, 0);
+    vram_fill((uint8_t *)0x9800u, 0, 32 * 18);
+    vram_fill((uint8_t *)0x9C00u, 0, 32 * 18);
     VBK_REG = 0;
-    fill_bkg_rect(0, 0, 32, 18, 0);
-    fill_win_rect(0, 0, 20, 18, 0);
+    vram_fill((uint8_t *)0x9800u, 0, 32 * 18);
+    vram_fill((uint8_t *)0x9C00u, 0, 32 * 18);
 }
 
 uint8_t rnd(uint8_t n) {
@@ -712,36 +1109,36 @@ static uint8_t nbi;
 
 void s_begin(void) { sp = sbuf; }
 void s_str(const char *s) { while (*s) *sp++ = *s++; }
-void s_num(int16_t v) {
-    char tmp[7];
-    uint8_t n = 0;
+static const uint16_t pow10[4] = {10000, 1000, 100, 10};
+
+// decimal digits by repeated subtraction (no 16-bit division on the SM83)
+static char *put_dec(char *p, int16_t v) {
     uint16_t u;
-    if (v < 0) { *sp++ = '-'; u = (uint16_t)(-v); } else u = (uint16_t)v;
-    do { tmp[n++] = '0' + (u % 10); u /= 10; } while (u);
-    while (n) *sp++ = tmp[--n];
+    uint8_t i, d, started = 0;
+    if (v < 0) { *p++ = '-'; u = (uint16_t)(-v); } else u = (uint16_t)v;
+    for (i = 0; i < 4; i++) {
+        d = 0;
+        while (u >= pow10[i]) { u -= pow10[i]; d++; }
+        if (d || started) { *p++ = '0' + d; started = 1; }
+    }
+    *p++ = '0' + (uint8_t)u;
+    return p;
 }
+
+void s_num(int16_t v) { sp = put_dec(sp, v); }
 char *s_end(void) { *sp = 0; return sbuf; }
 
 const char *numstr(int16_t v) {
-    char *save = sp, *out;
-    char tmp[7];
-    uint8_t n = 0;
-    uint16_t u;
-    out = nbuf[nbi];
-    nbi = (nbi + 1) % 3;
-    sp = out;
-    if (v < 0) { *sp++ = '-'; u = (uint16_t)(-v); } else u = (uint16_t)v;
-    do { tmp[n++] = '0' + (u % 10); u /= 10; } while (u);
-    while (n) *sp++ = tmp[--n];
-    *sp = 0;
-    sp = save;
+    char *out = nbuf[nbi];
+    if (++nbi == 3) nbi = 0;
+    *put_dec(out, v) = 0;
     return out;
 }
 
 const char *mlstr(int16_t v, uint8_t sign) {
     char *save = sp, *out;
     out = nbuf[nbi];
-    nbi = (nbi + 1) % 3;
+    if (++nbi == 3) nbi = 0;
     sp = out;
     if (sign && v > 0) *sp++ = '+';
     {

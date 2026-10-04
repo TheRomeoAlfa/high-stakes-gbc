@@ -7,7 +7,8 @@ extern const uint8_t font_rows[640];
 extern const uint8_t font_w[128];
 extern const uint8_t big_w[36];
 extern const uint8_t big_kern[36];
-extern const uint16_t big_rows[360];
+extern const uint8_t big_l[360];
+extern const uint8_t big_r[360];
 #define N_CARD_TILES 217
 #define CF_BACK 0
 #define CF_EDGE 3
@@ -160,5 +161,6 @@ extern const uint8_t ring_map[260];
 extern const uint8_t ring_attr[260];
 extern const uint8_t ring_thick[260];
 #define N_RING_TILES 65
+extern const uint8_t fade_tab[832];
 extern const uint8_t vial_px[171];
 #endif

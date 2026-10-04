@@ -107,7 +107,9 @@ static void stepv(int16_t *v, int16_t target) {
 }
 
 void update_gtxt(void) BANKED {
-    if (frames % 5) return;
+    static uint8_t tick5;
+    if (++tick5 < 5) return;
+    tick5 = 0;
     if (stakes_txt != stakes) {
         stepv(&stakes_txt, stakes);
         if (ticksfx) sfx(ticksfx);
@@ -164,12 +166,14 @@ static uint8_t vcard, autoflip;
 
 typedef struct {
     uint8_t used, tile, pal, w16, delay, delme;
+    uint8_t rest;          // settled: skip physics until something moves it
     int16_t x, y, dx, dy;
     int16_t z, zd, zbase;  // 8.8
     uint16_t cardmask;
 } chip_t;
 #define MAXCH 24
 static chip_t chips[MAXCH];
+static uint8_t chip_hi;   // slots >= chip_hi are unused (loops stop there)
 
 uint8_t gs[6];                // gchip state per slot (0 = gone)
 static uint8_t gs_drawn[6];
@@ -211,10 +215,14 @@ static const canvas_t CV_ROUND = {cvbuf, 65, 0, 0, 16, 5, 1, 1, 0};
 static const canvas_t CV_WINV = {cvbuf, 70, 0, 13, 15, 7, 1, 0, 0};
 static const canvas_t CV_WIND = {cvbuf, 77, 0, 13, 16, 7, 1, 1, 0};
 static const canvas_t CV_STLBL = {cvbuf, 84, 0, 7, 17, 6, 1, 1, 0};
+// bonus box and pass button keep a pre-rendered highlighted variant in separate
+// tiles, so a highlight change only rewrites a few map bytes
 static const canvas_t CV_BONUS = {cvbuf, 90, 0, 0, 1, 5, 2, 1, 0};
-static const canvas_t CV_PASS = {cvbuf, 100, 0, 0, 12, 5, 2, 1, 0};
-static const canvas_t CV_COST = {cvbuf, 110, 0, 0, 11, 5, 1, 0, 0};
-static const canvas_t CV_HELP = {cvbuf, 115, 0, 0, 0, 20, 4, 1, 1};
+static const canvas_t CV_BONUS_HL = {cvbuf, 240, 0, 0, 1, 5, 2, 1, 0};
+static const canvas_t CV_PASS = {cvbuf, 100, 0, 1, 12, 3, 2, 1, 0};
+static const canvas_t CV_PASS_HL = {cvbuf, 106, 0, 1, 12, 3, 2, 1, 0};
+static const canvas_t CV_COST = {cvbuf, 235, 0, 0, 11, 5, 1, 0, 0};
+static const canvas_t CV_HELP = {dlgbuf, 115, 0, 0, 0, 20, 4, 1, 1};
 static const canvas_t CV_BANNER = {cvbuf, 115, 0, 0, 0, 20, 2, 0, 1};
 static canvas_t cv_line = {cvbuf, 155, 0, 0, 2, 20, 1, 0, 1};
 
@@ -268,41 +276,105 @@ static int16_t passcost(void) {
 
 static uint8_t bonus_shown, pass_shown, cost_shown;
 static int16_t bonus_val;
+static uint8_t bonus_dirty = 1;   // stake bonus only changes when cards flip / a round starts
 
-static void hud_bonus(void) {
+// HUD canvases are redrawn through a queue: at most one per frame (see game_frame),
+// so several HUD changes landing together never push a frame over budget.
+static uint8_t hud_pend, help_busy;
+#define HP_STAKES 1
+#define HP_WINV 2
+#define HP_BONUS 4
+#define HP_PASS 8
+static uint8_t bonus_want, pass_want;
+
+static void hud_bonus_check(void) {
     uint8_t vis = stabdx == 0;
     uint8_t hl = cur == 16 || curstab;
-    int16_t v = calcstabonus();
-    uint8_t key = vis | (hl << 1);
-    if (key == bonus_shown && v == bonus_val) return;
-    bonus_shown = key;
-    bonus_val = v;
-    cv_begin(&CV_BONUS, 0);
-    if (vis) {
-        const char *t = mlstr(v, 0);
-        uint8_t w = text_w(t) + 7;
-        cv_rrect(20 - w / 2, 2, w + 1, 9, 1);
-        cv_rect(21 - w / 2, 3, 20 - w / 2 + w - 1, 9, 0);
-        cv_cprint(t, 21, 4, hl ? 1 : 2);
+    if (bonus_dirty) {
+        int16_t v = calcstabonus();
+        bonus_dirty = 0;
+        if (v != bonus_val) {
+            bonus_val = v;
+            bonus_shown = 255;
+        }
     }
-    cv_draw(&CV_BONUS);
+    bonus_want = vis | (hl << 1);
+    if (bonus_want != bonus_shown) hud_pend |= HP_BONUS;
+}
+
+static int16_t bonus_rend[2] = {-32768, -32768};   // value rendered in each variant
+
+static void hud_bonus_draw(void) {
+    uint8_t vis = bonus_want & 1, hl = bonus_want >> 1;
+    const canvas_t *c = hl ? &CV_BONUS_HL : &CV_BONUS;
+    bonus_shown = bonus_want;
+    if (!vis) {
+        map_tiles(0, 0, 1, 5, 2, 0);
+        return;
+    }
+    if (bonus_rend[hl] != bonus_val) {
+        const char *t = mlstr(bonus_val, 0);
+        uint8_t w = text_w(t) + 7;
+        cv_begin(c, 0);
+        cv_frame(20 - w / 2, 2, w + 1, 9, 1);   // same pixels as rrectfill + inner black
+        cv_cprint(t, 21, 4, hl ? 1 : 2);
+        cv_flush(c);
+        bonus_rend[hl] = bonus_val;
+    }
+    cv_place_tiles(c);
+}
+
+static void hud_bonus(void) {
+    hud_bonus_check();
+    if (hud_pend & HP_BONUS) {
+        hud_pend &= ~HP_BONUS;
+        hud_bonus_draw();
+    }
+}
+
+static void hud_pass_check(void) {
+    uint8_t vis = !bonusmode && result == 0;
+    pass_want = vis | ((cur == 17) << 1);
+    if (pass_want != pass_shown) hud_pend |= HP_PASS;
+}
+
+// renders both pass button variants and the cost label (cost only changes per match)
+static void hud_pass_render(void) {
+    uint8_t k;
+    for (k = 0; k < 2; k++) {
+        const canvas_t *c = k ? &CV_PASS_HL : &CV_PASS;
+        cv_begin(c, 0);
+        cv_frame(1, 2, 23, 10, 2);
+        cv_print("pass", 5, 4, k ? 1 : 2);
+        cv_flush(c);
+    }
+    cv_begin(&CV_COST, 0);
+    cv_cprint(mlstr(passcost(), 0), 21, 2, 2);
+    cv_flush(&CV_COST);
+    cv_place_attrs(&CV_PASS);
+    cv_place_attrs(&CV_COST);
+    cv_place_attrs(&CV_BONUS);
+}
+
+static void hud_pass_draw(void) {
+    uint8_t vis = pass_want & 1, sel = pass_want >> 1;
+    pass_shown = pass_want;
+    if (!vis) {
+        map_tiles(0, 1, 12, 3, 2, 0);
+        map_tiles(0, 0, 11, 5, 1, 0);
+        return;
+    }
+    cv_place_tiles(sel ? &CV_PASS_HL : &CV_PASS);
+    if (sel) cv_place_tiles(&CV_COST);
+    else map_tiles(0, 0, 11, 5, 1, 0);
 }
 
 static void hud_pass(void) {
-    uint8_t vis = !bonusmode && result == 0;
-    uint8_t key = vis | ((cur == 17) << 1);
-    if (key == pass_shown) return;
-    pass_shown = key;
-    cv_begin(&CV_PASS, 0);
-    if (vis) {
-        cv_rrect(9, 2, 23, 10, 2);
-        cv_rect(10, 3, 30, 11, 0);
-        cv_print("pass", 13, 4, cur == 17 ? 1 : 2);
+    hud_pass_check();
+    if (hud_pend & HP_PASS) {
+        hud_pend &= ~HP_PASS;
+        hud_pass_draw();
     }
-    cv_draw(&CV_PASS);
-    cv_begin(&CV_COST, 0);
-    if (vis && cur == 17) cv_cprint(mlstr(passcost(), 0), 21, 2, 2);
-    cv_draw(&CV_COST);
 }
 
 static void draw_slot(uint8_t i) {
@@ -314,6 +386,9 @@ static void draw_slot(uint8_t i) {
 
 static void hud_all(void) {
     bonus_shown = pass_shown = 255;
+    bonus_rend[0] = bonus_rend[1] = -32768;
+    hud_pend = 0;
+    hud_pass_render();
     hud_stakes();
     hud_wins();
     hud_winv();
@@ -339,12 +414,14 @@ static chip_t *newchip(void) {
         if (!chips[i].used) {
             memset(&chips[i], 0, sizeof(chip_t));
             chips[i].used = 1;
+            if (i >= chip_hi) chip_hi = i + 1;
             return &chips[i];
         }
     return &chips[MAXCH - 1];
 }
 
 static void dochip(chip_t *c) {
+    if (c->rest) return;
     if (c->delay) { c->delay--; return; }
     if (c->dx - c->x >= 1 || c->x - c->dx >= 1) c->x += c->dx > c->x ? 1 : -1;
     if (c->dy - c->y >= 1 || c->y - c->dy >= 1) c->y += c->dy > c->y ? 1 : -1;
@@ -353,26 +430,29 @@ static void dochip(chip_t *c) {
     if (c->z <= c->zbase) {
         c->z = c->zbase;
         if (c->zd > 384 || c->zd < -384) {
-            c->zd = -(int16_t)(((int32_t)c->zd * 77) >> 8);
+            c->zd = -((c->zd >> 2) + (c->zd >> 5) + (c->zd >> 6));   // bounce: ~0.3x
             sfx(58);
         } else c->zd = 0;
     }
     if ((c->delme && c->y - (c->z >> 8) <= -10) || c->x <= -14) c->used = 0;
+    else if (!c->zd && c->z == c->zbase && c->x == c->dx && c->y == c->dy && !c->delme) c->rest = 1;
 }
 
 static void dochips(void) {
+    chip_t *c = chips;
     uint8_t i;
-    for (i = 0; i < MAXCH; i++)
-        if (chips[i].used) dochip(&chips[i]);
+    for (i = chip_hi; i; i--, c++)
+        if (c->used && !c->rest) dochip(c);
 }
 
 static void swipechips(uint8_t ci) {
     uint8_t i;
     uint16_t m = 1 << ci;
-    for (i = 0; i < MAXCH; i++)
+    for (i = 0; i < chip_hi; i++)
         if (chips[i].used && (chips[i].cardmask & m)) {
             chips[i].zd = 8 * 256;
             chips[i].delme = 1;
+            chips[i].rest = 0;
             sfx(58);
         }
 }
@@ -549,6 +629,7 @@ static void flipbegin(uint8_t ci) {
 
 static void cardflip(uint8_t ci) {
     uint8_t hc, l, k, n;
+    bonus_dirty = 1;
     if (cards[ci].badstab) {
         endgame(EG_BADSTAB);
         return;
@@ -642,9 +723,11 @@ void dealround(void) BANKED {
         } else gs[rnd(6)] = 10;
     }
     memset(chips, 0, sizeof(chips));
+    chip_hi = 0;
     result = 0;
     stakes = 0;
     round_++;
+    bonus_dirty = 1;
 }
 
 void bonusround(void) BANKED {
@@ -760,7 +843,7 @@ static void draw_sprites(void) {
     if (dangrect >= 0) {
         uint8_t dr;
         int16_t x0, y0;
-        drectsani -= drectsani / 60;
+        drectsani -= drectsani >> 6;
         if (drectsani < 256) drectsani = 0;
         dr = (uint8_t)(dangrect + (drectsani >> 8)) & 3;
         if (ldrect != dr) { ldrect = dr; sfx(57); }
@@ -771,11 +854,15 @@ static void draw_sprites(void) {
         spr_put(x0, y0 + 48, SPR_CORNER, SPRPAL_CORNER | 0x40);
         spr_put(x0 + 40, y0 + 48, SPR_CORNER, SPRPAL_CORNER | 0x60);
     }
-    for (i = 0; i < MAXCH; i++) {
-        chip_t *c = &chips[i];
-        if (!c->used) continue;
-        if (c->w16) spr_put16(c->x, c->y - (c->z >> 8), c->tile, c->pal);
-        else spr_put(c->x, c->y - (c->z >> 8), c->tile, c->pal);
+    {
+        chip_t *c = chips;
+        for (i = chip_hi; i; i--, c++) {
+            int16_t sy;
+            if (!c->used) continue;
+            sy = c->y - (int8_t)((uint8_t *)&c->z)[1];   // z is 8.8: integer part = high byte
+            if (c->w16) spr_put16(c->x, sy, c->tile, c->pal);
+            else spr_put(c->x, sy, c->tile, c->pal);
+        }
     }
 }
 
@@ -788,19 +875,30 @@ static void doshake(void) {
     } else cam_x = cam_y = 0;
 }
 
-static void help_update(void) {
+// The help box is rendered into its own buffer, then uploaded one tile row per
+// frame while the window slides up. Returns 1 if it did VRAM work this frame.
+static uint8_t help_rows = 4;
+
+static uint8_t help_update(void) {
+    uint8_t busy = 0;
     int16_t target = helpi ? 112 : 144;
     if (helpi && helpi != help_drawn) {
         cv_begin(&CV_HELP, 0);
         cv_frame(2, 1, 156, 29, 1);
         cv_print(helptxt[helpi - 1], 7, 5, 2);
-        cv_draw(&CV_HELP);
+        cv_place(&CV_HELP);
         help_drawn = helpi;
+        help_rows = 0;
     }
-    helpwy += (target - helpwy + (target > helpwy ? 3 : -3)) / 4;
+    if (help_rows < 4) {
+        cv_flush_rows(&CV_HELP, help_rows++, 1);
+        busy = 1;
+    }
+    if (helpwy != target) helpwy += (target - helpwy + (target > helpwy ? 3 : -3)) >> 2;
     if (helpwy > 144) helpwy = 144;
     WY_REG = (uint8_t)helpwy;
     win_show = helpwy < 144;
+    return busy;
 }
 
 static void game_frame(void) {
@@ -809,11 +907,27 @@ static void game_frame(void) {
     draw_sprites();
     for (i = 0; i < 6; i++)
         if (gs[i] != gs_drawn[i]) draw_slot(i);
-    if (gtxt_changed & 1) hud_stakes();
-    if (gtxt_changed & 2) hud_winv();
+    if (gtxt_changed & 1) hud_pend |= HP_STAKES;
+    if (gtxt_changed & 2) hud_pend |= HP_WINV;
     gtxt_changed = 0;
-    hud_bonus();
-    hud_pass();
+    hud_bonus_check();
+    hud_pass_check();
+    // one HUD canvas per frame, cursor feedback first; none while the help box renders
+    if (hud_pend && !help_busy) {
+        if (hud_pend & HP_PASS) { hud_pend &= ~HP_PASS; hud_pass_draw(); }
+        else if (hud_pend & HP_BONUS) { hud_pend &= ~HP_BONUS; hud_bonus_draw(); }
+        else if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(); }
+        else { hud_pend &= ~HP_WINV; hud_winv(); }
+    }
+    help_busy = 0;
+#ifdef DEBUG_FPS
+    if ((frames & 63) == 0) {
+        cv_begin(&CV_STLBL, 0);
+        s_begin(); s_num((int16_t)(dbg_loops & 0x7FFF)); s_str("/"); s_num((int16_t)(sys_time & 0x7FFF));
+        cv_print(s_end(), 0, 1, 1);
+        cv_draw(&CV_STLBL);
+    }
+#endif
     frame();
 }
 
@@ -856,8 +970,9 @@ static void round_setup_visuals(void) {
 // card animations; returns flags: bit0 noani, bit1 canact
 static uint8_t do_cards(void) {
     uint8_t i, noani = 1, canact = 1;
-    for (i = 0; i < 9; i++) {
-        card_t *c = &cards[i];
+    card_t *c = cards;
+    for (i = 0; i < 9; i++, c++) {
+        if (!c->ani && !c->delay) continue;   // idle card
         if (c->delay) {
             c->delay--;
             canact = 0;
@@ -990,11 +1105,6 @@ void scene_game(void) BANKED {
     if (bonusmode) musiclvl(3);
     for (;;) {
         update_gtxt();
-        if (gtxt_changed) {
-            if (gtxt_changed & 1) hud_stakes();
-            if (gtxt_changed & 2) hud_winv();
-            gtxt_changed = 0;
-        }
         if (wining_txt == wining && ticksfx && !bonusmode) ticksfx = 0;
         fl = do_cards();
         noani = fl & 1;
@@ -1009,8 +1119,17 @@ void scene_game(void) BANKED {
         }
         dochips();
         // stake motion
-        stabx += (stabdx - stabx) / 10;
-        staby += (stabdy - staby) / 4;
+        // easing with shifts instead of 16-bit divisions (~1/10 and 1/4 per frame)
+        if (stabx != stabdx) {
+            int16_t d = stabdx - stabx;
+            int16_t s = (d >> 3) - (d >> 5);
+            stabx += s ? s : (d > 0 ? 1 : -1);
+        }
+        if (staby != stabdy) {
+            int16_t d = stabdy - staby;
+            int16_t s = d >> 2;
+            staby += s ? s : (d > 0 ? 1 : -1);
+        }
         if (pflockdest > 0) {
             canact = 0;
             showcur = 0;
@@ -1022,6 +1141,7 @@ void scene_game(void) BANKED {
                     for (i = 0; i < MAXCH; i++)
                         if (chips[i].used) {
                             chips[i].zd = 384;
+                            chips[i].rest = 0;
                             chips[i].dx += (int16_t)rnd(20) - 10;
                             chips[i].dy += (int16_t)rnd(20) - 10;
                         }
@@ -1034,6 +1154,7 @@ void scene_game(void) BANKED {
                 } else {
                     flipbegin(vcard);
                     cards[vcard].badstab = 1;
+                    bonus_dirty = 1;
                     pflockard = 255;
                 }
             }
@@ -1081,8 +1202,10 @@ void scene_game(void) BANKED {
             int16_t tx = (int16_t)curpos[cur - 1][0] << 8;
             int16_t ty = (int16_t)(curpos[cur - 1][1] - ((cur <= 9 && curchip) ? 7 : 0)) << 8;
             int16_t dx = tx - curx, dy = ty - cury;   // move 2/3 of the way (no 16-bit overflow)
-            curx += dx - dx / 3;
-            cury += dy - dy / 3;
+            curx += (dx >> 1) + (dx >> 3) + (dx >> 4);   // ~2/3 of the way
+            cury += (dy >> 1) + (dy >> 3) + (dy >> 4);
+            if (dx > -256 && dx < 256) curx = tx;
+            if (dy > -256 && dy < 256) cury = ty;
         }
         helpi = 0;
         if (canact && showcur) {
@@ -1094,7 +1217,7 @@ void scene_game(void) BANKED {
                 else if (s) helpi = cur <= 12 ? 4 : 5;
             } else if (cur == 16 || curstab) helpi = 3;
         }
-        help_update();
+        help_busy = help_update();
         game_frame();
     }
 }

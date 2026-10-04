@@ -182,11 +182,19 @@ void scene_start(void) BANKED {
             cv_cprint(stmnu[stcur], 80, 22, 2);
             if (stcur > 0) cv_putc('\x02', 42, 22, 2);
             if (stcur < nst - 1) cv_putc('\x03', 112, 22, 2);
+#ifdef DEBUG_FPS
+            s_begin(); s_num((int16_t)(dbg_loops & 0x7FFF)); s_str("/"); s_num((int16_t)(sys_time & 0x7FFF));
+            cv_print(s_end(), 2, 33, 1);
+#else
             cv_print("gb v1", 2, 33, 3);
+#endif
             cv_draw(&bar);
             redraw = 0;
         }
         rings_update();
+#ifdef DEBUG_FPS
+        if ((frames & 63) == 0) redraw = 1;
+#endif
         {
             uint8_t f = ((frames >> 3) & 1);
             if (f != flash) {
@@ -225,7 +233,7 @@ void scene_intro(void) BANKED {
         "don't take it too hard\nyou were living on\nborrowed time anyway",
         "here, the last shot is\non me. it will take\nthe edge off",
         "or maybe you can win\nit all back? how about\nit? one last game..."};
-    static const canvas_t big = {cvbuf, 140, 0, 2, 14, 16, 2, 0, 0};
+    static const canvas_t big = {cvbuf, 140, 0, 5, 14, 10, 2, 0, 0};   // just wide enough for 5000ML
     uint8_t ti = 0, done = 0, arrow = 0;
     reset_screen();
     vampval = 10;
@@ -244,7 +252,7 @@ void scene_intro(void) BANKED {
         update_gtxt();
         if (gtxt_changed & 4) {
             cv_begin(&big, 0);
-            cv_bignumc(numstr(blood_txt), 64, 2, 3, 1);
+            cv_bignumc(numstr(blood_txt), 40, 2, 3, 1);
             cv_draw(&big);
             gtxt_changed = 0;
         }

@@ -19,7 +19,7 @@ typedef struct {
 } canvas_t;
 
 extern uint8_t cvbuf[];   // shared scratch (160 tiles)
-extern uint8_t dlgbuf[];  // persistent buffer for dialog text (64 tiles)
+extern uint8_t dlgbuf[];  // persistent buffer for dialog / help text (80 tiles)
 
 void cv_begin(const canvas_t *c, uint8_t col);  // select + clear
 void cv_select(const canvas_t *c);              // select without clearing
@@ -40,14 +40,22 @@ void cv_flush(const canvas_t *c);                 // upload tiles
 void cv_flush_tile(const canvas_t *c, uint16_t i); // upload one tile
 uint16_t cv_tile_at(int16_t x, int16_t y);       // tile index within canvas
 void cv_place(const canvas_t *c);                 // write map + attributes
-void cv_draw(const canvas_t *c);                  // flush + place
+void cv_draw(const canvas_t *c);                  // flush + place (placement cached)
+void cv_invalidate(void);                         // forget cached placements
+void cv_flush_rows(const canvas_t *c, uint8_t r0, uint8_t n);
+void cv_place_tiles(const canvas_t *c);           // tile indices only, uncached
+void cv_place_attrs(const canvas_t *c);
+void map_tiles(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t tile);
 
 // ---- map helpers
 void map_fill(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t tile, uint8_t attr);
 void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs);
 void load_bkg_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank);
 void load_spr_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank);
-void make_solid_tiles(void);   // tiles 252..255 bank 0 = solid colour 0..3
+void make_solid_tiles(void);
+void vram_copy(uint8_t *dst, const uint8_t *src, uint16_t len);   // len multiple of 4
+void vram_fill(uint8_t *dst, uint8_t v, uint16_t len);
+void bkg_tiles_upload(uint8_t first, uint16_t n, const uint8_t *src);   // tiles 252..255 bank 0 = solid colour 0..3
 #define TILE_SOLID(c) (252 + (c))
 
 // ---- palettes & fades
@@ -67,6 +75,9 @@ void spr_end(void);
 
 // ---- frame & input
 extern uint8_t frames;
+#ifdef DEBUG_FPS
+extern uint16_t dbg_loops;   // main-loop frames vs sys_time (VBlanks) shows dropped frames
+#endif
 extern uint8_t joy, joyp;
 extern uint8_t scx, scy;
 #define BTNP(b) (joyp & (b))

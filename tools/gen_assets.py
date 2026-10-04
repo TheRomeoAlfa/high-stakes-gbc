@@ -506,7 +506,11 @@ def main():
             brow += [0] * 10
     carr('big_w', bw)
     carr('big_kern', bk)
-    carr('big_rows', brow, 'uint16_t', per=10)
+    # rows as MSB-first bytes (bit7 = leftmost): left 8 columns and columns 8-9
+    def rev8(v):
+        return int('{:08b}'.format(v & 255)[::-1], 2)
+    carr('big_l', [rev8(r) for r in brow], per=10)
+    carr('big_r', [rev8(r >> 8) for r in brow], per=10)
 
     # ---------------- cards (bank 1, base 0)
     faces = {v: card_face(v) for v in range(2, 14)}
@@ -758,6 +762,9 @@ def main():
     define('N_RING_TILES', len(rpool.tiles))
     print('ring tiles', len(rpool.tiles))
 
+    # ---------------- palette fade table: fade_tab[k][c] = c * k^2 / 625, k = 0..25
+    carr('fade_tab', [c * k * k // 625 for k in range(26) for c in range(32)])
+
     # ---------------- vial bitmap 9x19 (pico colours 0,8,2)
     vial = crop(0, 109, 9, 19)
     carr('vial_px', [c for r in vial for c in r])
@@ -785,6 +792,8 @@ def main():
                     best = (e, (s << 4) | r)
         ntab.append(best[1])
     aud_arr('noise_tab', ntab)
+    # reciprocal of note length in frames: 65536 / nd (nd >= 1)
+    aud_arr('recip_tab', [min(65535, 65536 // n) for n in range(1, 129)], 'uint16_t')
 
     H.append('#endif')
     with open(os.path.join(ROOT, 'src', 'gen', 'assets.h'), 'w') as f:
