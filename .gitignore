@@ -1,0 +1,7 @@
+build/obj/
+build/*.ihx
+build/*.map
+build/*.noi
+build/*.ram
+build/*.sav
+build/preview/
