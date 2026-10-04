@@ -76,7 +76,7 @@ static uint16_t chfreq[4];
 static int16_t chop[4] = {-1, -1, -1, -1};
 static uint8_t hwvol[4];        // simulated hardware level * 16
 static int8_t hwstep[4];        // simulated envelope change per frame
-static uint8_t wave_loaded = 255, wave_level = 255;
+static uint8_t wave_loaded = 255, wave_level = 255, wave_hold, wave_quiet;
 
 // wave-channel (bass) waveforms, scaled to 70% amplitude around the midpoint
 // so the bass doesn't dominate or distort small speakers
@@ -368,8 +368,10 @@ static void voice_frame(uint8_t vi) {
         if (seq_advance(&p->isq, &lo, &hi)) {
             uint8_t ow = p->in.wave, ov = p->in.vol, op = p->in.pitch;
             note_start(&p->in, &p->isq, lo, hi);
-            // instrument notes that change pitch/wave or come in from silence retrigger
-            if (!ov || ow != p->in.wave || (op != p->in.pitch && p->in.fx != 1)) p->newnote = 1;
+            // only instrument notes that change waveform or come in from silence
+            // retrigger; pitch changes (arpeggios, runs) just retune like PICO-8
+            if (!ov || ow != p->in.wave) p->newnote = 1;
+            (void)op;
         }
         if (p->isq.done) p->in.vacc = p->in.vstep = 0;
         ip = note_pitch(&p->in);
@@ -417,6 +419,7 @@ static uint8_t env_reg(uint8_t ch, uint8_t v, int8_t dv) {
     }
     hwvol[ch] = lvl << 4;
     hwstep[ch] = p ? (dv < 0 ? -(int8_t)envstep[p] : (int8_t)envstep[p]) : 0;
+    if (!lvl) return 0x08;   // silent but DAC stays on (0x00 would switch it off: pop)
     return (lvl << 4) | (dv > 0 && p ? 8 : 0) | p;
 }
 
@@ -488,25 +491,48 @@ static void wave_out(voice_t *p, uint8_t trig) {
     // wave channel: 4 output levels, changeable without retriggering
     // capped at 50%: the bass sits on this channel and full level makes small
     // speakers distort (100% is the loudest output any GB channel has)
-    level = v < 24 ? 0 : v < 120 ? 3 : 2;
+    // Level changes shift the channel's DC offset (a click), so they use
+    // hysteresis and are held for at least 4 frames.
+    level = wave_level;
+    if (wave_hold) wave_hold--;
+    else {
+        uint8_t want = wave_level;
+        if (v >= 16) wave_quiet = 0;
+        if (wave_level == 0 || wave_level == 255) { if (v > 40) want = v > 120 ? 2 : 3; }
+        else if (v < 16) {
+            // stay at the low level through the short gaps between bass notes;
+            // only mute after a sustained silence
+            if (++wave_quiet > 12) want = 0;
+            else want = 3;
+        }
+        else if (wave_level == 3 && v > 140) want = 2;
+        else if (wave_level == 2 && v < 90) want = 3;
+        if (want != wave_level) { level = want; wave_hold = 4; }
+    }
     if (p->op == chop[2] && !trig) fr = chfreq[2];
     else { fr = freq_of(p->op, 12); chop[2] = p->op; }
-    if (w != wave_loaded) {
+    // One fixed waveform: rewriting wave RAM needs the DAC switched off, which
+    // pops on every bass/kick change. Loaded once, the channel is then only muted.
+    (void)w;
+    (void)trig;
+    if (wave_loaded == 255) {
         uint8_t i;
-        const uint8_t *src = waves[w == 6 ? 2 : (w > 6 ? 6 : w)];
         NR30_REG = 0;
-        for (i = 0; i < 16; i++) (&AUD3WAVE[0])[i] = src[i];
-        wave_loaded = w;
+        for (i = 0; i < 16; i++) (&AUD3WAVE[0])[i] = waves[0][i];
+        NR30_REG = 0x80;
+        wave_loaded = 0;
         trig = 1;
     }
     if (level != wave_level) {
         NR32_REG = level << 5;
         wave_level = level;
     }
-    if (trig) {
-        NR30_REG = 0x80;
+    // Only the first start triggers: a trigger restarts the waveform mid-cycle,
+    // which clicks; volume is set via NR32 so new notes just change frequency.
+    if (wave_loaded == 0) {
         NR33_REG = fr & 255;
         NR34_REG = 0x80 | (fr >> 8);
+        wave_loaded = 1;
     } else if (fr != chfreq[2]) {
         NR33_REG = fr & 255;
         NR34_REG = fr >> 8;
@@ -518,10 +544,11 @@ static void ch_silence(uint8_t ch) {
     if (chown[ch] == 255) return;
     chown[ch] = 255;
     switch (ch) {
-    case 0: NR12_REG = 0; NR14_REG = 0x80; break;
-    case 1: NR22_REG = 0; NR24_REG = 0x80; break;
-    case 2: NR30_REG = 0; wave_loaded = 255; wave_level = 255; break;
-    case 3: NR42_REG = 0; NR44_REG = 0x80; break;
+    // silence with the DAC left on (switching DACs off/on pops)
+    case 0: NR12_REG = 0x08; NR14_REG = 0x80; break;
+    case 1: NR22_REG = 0x08; NR24_REG = 0x80; break;
+    case 2: NR32_REG = 0; wave_level = 0; break;
+    case 3: NR42_REG = 0x08; NR44_REG = 0x80; break;
     }
     hwvol[ch] = 0;
     hwstep[ch] = 0;
