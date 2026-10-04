@@ -234,7 +234,7 @@ def spr_convert(img, pal):
     return out
 
 
-def add_sprite(pool, img, pal):
+def add_sprite(pool, img, pal, keep_empty=False):
     """Pads img to multiple of 8x16, returns list of (dx,dy,tile) parts."""
     w = (len(img[0]) + 7) // 8 * 8
     h = (len(img) + 15) // 16 * 16
@@ -246,7 +246,7 @@ def add_sprite(pool, img, pal):
         for sx in range(0, w, 8):
             top = [r[sx:sx + 8] for r in px[sy:sy + 8]]
             bot = [r[sx:sx + 8] for r in px[sy + 8:sy + 16]]
-            if all(v == 0 for r in top + bot for v in r):
+            if not keep_empty and all(v == 0 for r in top + bot for v in r):
                 continue
             parts.append((sx, sy, pool.add_pair(top, bot)))
     return parts
@@ -609,8 +609,8 @@ def main():
     OPAL = [[1, 7, 0], [1, 7, 8], [1, 8, 15], [1, 13, 6], [9, 2, 10], [14, 2, 10], [14, 15, 7], [9, 8, 10]]
     spr_defs = []
 
-    def sdef(name, img, pal):
-        parts = add_sprite(sp, img, OPAL[pal])
+    def sdef(name, img, pal, keep_empty=False):
+        parts = add_sprite(sp, img, OPAL[pal], keep_empty)
         spr_defs.append((name, pal, parts))
 
     hand = crop(10, 15, 9, 10, transp=(11,))
@@ -632,7 +632,16 @@ def main():
     dn = [[T if c == '.' else {'1': 1, '8': 8, 'f': 15, '9': 9}[c] for c in r] for r in
           [".111111.", "18888881", "18f88f81", "188ff881", "18888881", "19999991", ".111111."]]
     sdef('ARR_D', dn, 2)
-    sdef('STAKE', crop(0, 16, 8, 56, transp=(0,)), 4)
+    stake = crop(0, 16, 8, 56, transp=(0,))
+    sdef('STAKE', stake, 4)
+    # highlight: the original draws the stake in pink at +-1 offsets behind itself
+    outl = blank(16, 58)
+    for y in range(56):
+        for x in range(8):
+            if stake[y][x] != T:
+                for dx, dy in ((0, 1), (2, 1), (1, 0), (1, 2)):
+                    outl[y + dy][x + dx] = 14
+    sdef('STAKE_HL', outl, 6, keep_empty=True)
     sdef('PFLOCK', crop(8, 25, 8, 28, transp=(11,)), 5)
     pfc = crop(8, 25, 8, 28, transp=(11,))
     for y in range(20, 28):

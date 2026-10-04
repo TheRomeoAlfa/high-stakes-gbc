@@ -25,9 +25,9 @@ extern const uint8_t sep_attr[20];
 extern const uint8_t game_tiles[576];
 BANKREF_EXTERN(game_tiles)
 extern const uint16_t obj_pals[32];
-extern const uint8_t spr_tiles[1344];
+extern const uint8_t spr_tiles[1600];
 BANKREF_EXTERN(spr_tiles)
-#define N_SPR_TILES 84
+#define N_SPR_TILES 100
 #define SPR_HAND 0
 #define SPRPAL_HAND 0
 #define SPRW_HAND 8
@@ -91,31 +91,35 @@ BANKREF_EXTERN(spr_tiles)
 #define SPRPAL_STAKE 4
 #define SPRW_STAKE 8
 #define SPRN_STAKE 4
-#define SPR_PFLOCK 62
+#define SPR_STAKE_HL 62
+#define SPRPAL_STAKE_HL 6
+#define SPRW_STAKE_HL 16
+#define SPRN_STAKE_HL 8
+#define SPR_PFLOCK 78
 #define SPRPAL_PFLOCK 5
 #define SPRW_PFLOCK 8
 #define SPRN_PFLOCK 2
-#define SPR_PFLOCKCUT 66
+#define SPR_PFLOCKCUT 82
 #define SPRPAL_PFLOCKCUT 5
 #define SPRW_PFLOCKCUT 8
 #define SPRN_PFLOCKCUT 2
-#define SPR_STABCUR 70
+#define SPR_STABCUR 86
 #define SPRPAL_STABCUR 5
 #define SPRW_STABCUR 16
 #define SPRN_STABCUR 2
-#define SPR_CORNER 74
+#define SPR_CORNER 90
 #define SPRPAL_CORNER 7
 #define SPRW_CORNER 8
-#define SPR_DRIP 76
+#define SPR_DRIP 92
 #define SPRPAL_DRIP 7
 #define SPRW_DRIP 8
-#define SPR_DROP 78
+#define SPR_DROP 94
 #define SPRPAL_DROP 7
 #define SPRW_DROP 8
-#define SPR_MARR_L 80
+#define SPR_MARR_L 96
 #define SPRPAL_MARR_L 7
 #define SPRW_MARR_L 8
-#define SPR_MARR_R 82
+#define SPR_MARR_R 98
 #define SPRPAL_MARR_R 7
 #define SPRW_MARR_R 8
 #define IMG_BASE 217

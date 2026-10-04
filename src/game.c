@@ -741,8 +741,11 @@ static void draw_sprites(void) {
     // stake
     if (!curstab) {
         int16_t sx = 16 + (stabx >> 4), sy = 28 + (staby >> 4);
-        uint8_t pal = cur == 16 && showcur ? 6 : SPRPAL_STAKE;
-        for (i = 0; i < 4; i++) spr_put(sx, sy + i * 16, SPR_STAKE + i * 2, pal);
+        for (i = 0; i < 4; i++) spr_put(sx, sy + i * 16, SPR_STAKE + i * 2, SPRPAL_STAKE);
+        if (cur == 16 && showcur) {
+            // pink outline drawn behind the stake (lower OAM priority)
+            for (i = 0; i < 4; i++) spr_put16(sx - 1, sy - 1 + i * 16, SPR_STAKE_HL + i * 4, SPRPAL_STAKE_HL);
+        }
     }
     // falling stake
     if (pflockdest > 0) {
