@@ -30,6 +30,7 @@ PICO[4] = (0x11, 0x1D, 0x35)
 PICO[9] = (0xBE, 0x12, 0x50)
 PICO[10] = (0x42, 0x21, 0x36)
 T = -1  # transparent marker
+VOL_EXP = float(os.environ.get('VOL_EXP', '0.65'))  # loudness compression exponent
 
 
 def sheet(x, y):
@@ -792,6 +793,10 @@ def main():
                     best = (e, (s << 4) | r)
         ntab.append(best[1])
     aud_arr('noise_tab', ntab)
+    # loudness compression: PICO-8 mixes in float, the GB has 15 volume steps per
+    # channel, so quiet parts would round to silence. Map linear amplitude
+    # (vol*16, 0..240, indexed by /4) through a square-root curve.
+    aud_arr('vol_comp', [round(240 * (i / 60) ** VOL_EXP) for i in range(61)])
     # reciprocal of note length in frames: 65536 / nd (nd >= 1)
     aud_arr('recip_tab', [min(65535, 65536 // n) for n in range(1, 129)], 'uint16_t')
 
