@@ -23,6 +23,12 @@ ROM = read_cart(os.path.join(ROOT, 'assets', 'highstakes.p8.png'))
 PICO = [(0, 0, 0), (29, 43, 83), (126, 37, 83), (0, 135, 81), (171, 82, 54), (95, 87, 79),
         (194, 195, 199), (255, 241, 232), (255, 0, 77), (255, 163, 0), (255, 236, 39),
         (0, 228, 54), (41, 173, 255), (131, 118, 156), (255, 119, 168), (255, 204, 170)]
+# The cart remaps its screen palette every frame (fadepal(0) with its fadetable):
+# 3 -> 128, 4 -> 129, 9 -> 136, 10 -> 130 from PICO-8's secret palette.
+PICO[3] = (0x29, 0x18, 0x14)
+PICO[4] = (0x11, 0x1D, 0x35)
+PICO[9] = (0xBE, 0x12, 0x50)
+PICO[10] = (0x42, 0x21, 0x36)
 T = -1  # transparent marker
 
 
