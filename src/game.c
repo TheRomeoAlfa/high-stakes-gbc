@@ -187,14 +187,17 @@ static uint8_t result;        // 0 none, 1 won, 2 lost, 3 pass
 static uint8_t helpi, help_drawn;
 static int16_t helpwy;
 
-// cursor positions (GB pixels, top-left of hand) + navigation (down,left,right,up)
+// cursor positions: top-left of the hand sprite, whose fingertip is at (+3, 0).
+// As in the original, the fingertip is centred on chips/stake/pass and sits
+// horizontally centred, 8px below centre on cards. Then navigation: down, left, right, up.
+#define FT(x, y) (x) - 3, (y)
 static const uint8_t curpos[17][6] = {
-    {58, 33, 4, 16, 2, 10}, {82, 33, 5, 1, 3, 11}, {106, 33, 6, 2, 13, 12},
-    {58, 65, 7, 16, 5, 1}, {82, 65, 8, 4, 6, 2}, {106, 65, 9, 5, 14, 3},
-    {58, 97, 17, 16, 8, 4}, {82, 97, 17, 7, 9, 5}, {106, 97, 17, 8, 15, 6},
-    {56, 10, 1, 10, 11, 10}, {80, 10, 2, 10, 12, 11}, {104, 10, 3, 11, 12, 12},
-    {128, 34, 14, 3, 13, 13}, {128, 66, 15, 6, 14, 13}, {128, 98, 15, 9, 15, 14},
-    {21, 60, 17, 16, 4, 16}, {22, 104, 17, 17, 7, 16}};
+    {FT(53, 39), 4, 16, 2, 10}, {FT(77, 39), 5, 1, 3, 11}, {FT(101, 39), 6, 2, 13, 12},
+    {FT(53, 71), 7, 16, 5, 1}, {FT(77, 71), 8, 4, 6, 2}, {FT(101, 71), 9, 5, 14, 3},
+    {FT(53, 103), 17, 16, 8, 4}, {FT(77, 103), 17, 7, 9, 5}, {FT(101, 103), 17, 8, 15, 6},
+    {FT(51, 8), 1, 10, 11, 10}, {FT(75, 8), 2, 10, 12, 11}, {FT(99, 8), 3, 11, 12, 12},
+    {FT(123, 32), 14, 3, 13, 13}, {FT(123, 64), 15, 6, 14, 13}, {FT(123, 96), 15, 9, 15, 14},
+    {FT(20, 45), 17, 16, 4, 16}, {FT(20, 102), 17, 17, 7, 16}};
 static const uint8_t slot_tx[6] = {5, 8, 11, 14, 14, 14};
 static const uint8_t slot_ty[6] = {0, 0, 0, 3, 7, 11};
 static const uint8_t lines[6][3] = {{0, 3, 6}, {1, 4, 7}, {2, 5, 8}, {0, 1, 2}, {3, 4, 5}, {6, 7, 8}};
@@ -734,7 +737,7 @@ static void draw_sprites(void) {
         if (curstab) {
             spr_put16(x + 3, y - (cur <= 9 ? 7 : 0), SPR_STABCUR, SPRPAL_STABCUR);
         } else {
-            spr_put(x, y, SPR_HAND, SPRPAL_HAND);
+            spr_put16(x, y, SPR_HAND, SPRPAL_HAND);
         }
         if (curchip) spr_put16(x - 3, y - 6, held_tile[curchip], held_pal[curchip]);
     }
@@ -1077,8 +1080,9 @@ void scene_game(void) BANKED {
         {
             int16_t tx = (int16_t)curpos[cur - 1][0] << 8;
             int16_t ty = (int16_t)(curpos[cur - 1][1] - ((cur <= 9 && curchip) ? 7 : 0)) << 8;
-            curx += (tx - curx) * 2 / 3;
-            cury += (ty - cury) * 2 / 3;
+            int16_t dx = tx - curx, dy = ty - cury;   // move 2/3 of the way (no 16-bit overflow)
+            curx += dx - dx / 3;
+            cury += dy - dy / 3;
         }
         helpi = 0;
         if (canact && showcur) {

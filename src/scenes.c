@@ -473,8 +473,11 @@ void scene_ask(void) BANKED {
             cv_draw(&btn);
             redraw = 0;
         }
-        cx += (((cur ? 88 : 56) + 6) * 256 - cx) * 2 / 3;
-        spr_put(cx >> 8, 98, SPR_HAND, SPRPAL_HAND);
+        {
+            int16_t d = (cur ? 83 : 51) * 256 - cx;   // fingertip centred on the button
+            cx += d - d / 3;
+        }
+        spr_put16(cx >> 8, 98, SPR_HAND, SPRPAL_HAND);
         if (BTNP(J_A | J_START)) {
             sfx(51);
             if (cur == 1) {

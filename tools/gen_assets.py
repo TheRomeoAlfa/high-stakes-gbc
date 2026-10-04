@@ -613,12 +613,8 @@ def main():
         parts = add_sprite(sp, img, OPAL[pal], keep_empty)
         spr_defs.append((name, pal, parts))
 
-    hand = crop(10, 15, 9, 10, transp=(11,))
-    for y in range(10):
-        if hand[y][8] == 1 and hand[y][7] == 7:
-            hand[y][7] = 1
-        hand[y] = hand[y][:8]
-    sdef('HAND', hand, 0)
+    hand = crop(10, 15, 9, 10, transp=(11,))   # full 9x10 hand, fingertip at (3, 0)
+    sdef('HAND', hand, 0, keep_empty=True)
     for v in range(2, 10):
         sdef('TOK%d' % v, chip_img(1, '%d+' % v), 1)
     sdef('CHIP_PLUS', chip_img(1, '+'), 1)
