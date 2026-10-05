@@ -399,7 +399,8 @@ static void hud_all(void) {
 static void set_card_fr(uint8_t i, uint8_t fr) {
     if (cards[i].fr == fr) return;
     cards[i].fr = fr;
-    draw_card(CELLX(i), CELLY(i), fr);
+    if (fr == CARD_NONE) map_put_vbl(CELLX(i), CELLY(i), 3, 4, 0, 0);
+    else map_put_vbl(CELLX(i), CELLY(i), 3, 4, card_fmap + fr * 12, card_fattr + fr * 12);
 }
 
 static uint8_t face_of(uint8_t i) {

@@ -50,6 +50,7 @@ void map_tiles(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t 
 // ---- map helpers
 void map_fill(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t tile, uint8_t attr);
 void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs);
+void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs);  // BG map, at next VBlank (tiles NULL = clear)
 void load_bkg_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank);
 void load_spr_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank);
 void make_solid_tiles(void);

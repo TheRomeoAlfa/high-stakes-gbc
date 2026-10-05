@@ -723,6 +723,38 @@ void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint
     for (r = 0; r < h; r++, tiles += w) vram_copy(map_addr(win, x, y + r), tiles, w);
 }
 
+// map blocks queued for the next VBlank: tiles and attributes then change together
+// (written mid-frame, a block can show new attributes over old tiles for a frame)
+#define VQ_MAX 4
+typedef struct { uint8_t x, y, w, h; const uint8_t *tiles, *attrs; } vq_t;
+static vq_t vq[VQ_MAX];
+static uint8_t vq_n;
+
+static void vq_run(const vq_t *j) {
+    if (j->tiles) map_put(0, j->x, j->y, j->w, j->h, j->tiles, j->attrs);
+    else map_fill(0, j->x, j->y, j->w, j->h, 0, 0);
+}
+
+void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs) {
+    uint8_t i;
+    vq_t *j = vq;
+    for (i = 0; i < vq_n; i++, j++)
+        if (j->x == x && j->y == y) break;   // replaces a pending draw of the same block
+    if (i == VQ_MAX) {                       // full: draw now
+        vq_t t = {x, y, w, h, tiles, attrs};
+        vq_run(&t);
+        return;
+    }
+    if (i == vq_n) vq_n++;
+    j->x = x; j->y = y; j->w = w; j->h = h; j->tiles = tiles; j->attrs = attrs;
+}
+
+static void vq_flush(void) {
+    uint8_t i;
+    for (i = 0; i < vq_n; i++) vq_run(&vq[i]);
+    vq_n = 0;
+}
+
 void load_bkg_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank) {
     uint8_t save = _current_bank;
     SWITCH_ROM(rombank);
@@ -1029,6 +1061,7 @@ extern volatile uint8_t joy_latch;
 void frame(void) {
     spr_end();
     vsync();
+    if (vq_n) vq_flush();
     if (!fading_out && fadelvl) {
         fadelvl--;
         pal_dirty = 1;
@@ -1087,6 +1120,7 @@ void screen_on(void) {
 }
 
 void clear_bg(void) {
+    vq_n = 0;
     cv_invalidate();
     // rows 0-17 of both maps are contiguous 32-byte rows
     VBK_REG = 1;
