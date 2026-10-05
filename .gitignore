@@ -5,3 +5,4 @@ build/*.noi
 build/*.ram
 build/*.sav
 build/preview/
+.DS_Store
