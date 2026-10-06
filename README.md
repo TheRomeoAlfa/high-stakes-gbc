@@ -80,7 +80,7 @@ To play on a Chromatic, copy `build/highstakes.gbc` to a GBC flash cartridge.
 
 Original game by Krystian Majewski (Lazy Devs Academy), music by [Gruber](https://x.com/gruber_music),
 based on a cover design by [Tyler Q Anderson](https://x.com/tandyq) and Jamie C Lee
-(A Game By Its Cover Jam 2020).
+([A Game By Its Cover Jam 2020](https://itch.io/jam/a-game-by-its-cover-2020)).
 
 The original cartridge is licensed CC BY-NC-SA 4.0, so this port is too:
 non-commercial use only, with attribution, under the same licence. See [LICENSE](LICENSE).
