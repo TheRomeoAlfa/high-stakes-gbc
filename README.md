@@ -1,8 +1,14 @@
 # High Stakes — Game Boy Color demake
 
-A port of Krystian Majewski's PICO-8 card game
-[High Stakes](https://www.lexaloffle.com/bbs/?pid=83548) to the Game Boy Color
-(runs on real GBC hardware, the ModRetro Chromatic, and CGB emulators).
+An unofficial, fan-made port of Krystian Majewski's PICO-8 card game
+[High Stakes](https://www.lexaloffle.com/bbs/?pid=83548) to the Game Boy Color.
+It runs on real GBC hardware, the ModRetro Chromatic, and CGB emulators.
+
+Las Vegas 2024. Vampires have stolen your blood. Flip cards, read the hint tokens,
+stake the vampire before it gets you, and win it all back: every round, match and
+opponent from the original, with its music, redrawn for a 160x144 screen.
+
+*Not affiliated with or endorsed by the original authors, Lexaloffle Games or ModRetro.*
 
 ![screens](screenshots.png)
 
@@ -77,4 +83,6 @@ based on a cover design by Tyler Q Anderson and Jamie C Lee
 (A Game By Its Cover Jam 2020).
 
 The original cartridge is licensed CC BY-NC-SA 4.0, so this port is too:
-non-commercial use only, with attribution, under the same licence.
+non-commercial use only, with attribution, under the same licence. See [LICENSE](LICENSE).
+
+Built with [GBDK-2020](https://github.com/gbdk-2020/gbdk-2020).
