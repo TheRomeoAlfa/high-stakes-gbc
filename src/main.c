@@ -26,8 +26,35 @@ static void vbl_isr(void) {
     else LCDC_REG &= ~LCDCF_WINON;
 }
 
+// score banner wave: BG palette 0 colours 1-3 are swapped on the band's lines (see game.c)
+volatile uint8_t band_on;
+uint8_t band_pal[6], band_rest[6];
+static uint8_t band_set;
+
+static void band_write(const uint8_t *p) {
+    while (STAT_REG & 3);   // HBlank: palette RAM is locked while the line is drawn
+    BCPS_REG = 0x82;        // palette 0, colour 1, auto-increment
+    BCPD_REG = p[0];
+    BCPD_REG = p[1];
+    BCPD_REG = p[2];
+    BCPD_REG = p[3];
+    BCPD_REG = p[4];
+    BCPD_REG = p[5];
+}
+
 static void lcd_isr(void) {
+    if (LYC_REG == BAND_LY - 1) {
+        band_write(band_pal);
+        band_set = 1;
+        LYC_REG = 112;
+        return;
+    }
     if (win_split) LCDC_REG &= ~LCDCF_WINON;
+    if (band_set) {
+        band_write(band_rest);
+        band_set = 0;
+    }
+    if (band_on) LYC_REG = BAND_LY - 1;
 }
 
 static const uint8_t blank16[16] = {0};

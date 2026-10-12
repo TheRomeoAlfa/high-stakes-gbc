@@ -34,7 +34,10 @@ All graphics come from the original sprite sheet, converted at build time: tiles
 quantised to GBC palettes (4 colours per 8x8 tile, 8 palettes) and cards are redrawn at
 21x29 to suit the 160x144 screen. Flipped cards hop and turn over a drop shadow like the
 original's: all 21 frames of the flip are pre-rendered per card, streamed to VRAM by CGB DMA
-in VBlank, and blended over the card or slot they overlap.
+in VBlank, and blended over the card or slot they overlap. Bonus chips hop when unlocked or
+put back and lift under the cursor. At the end of a round the banner fills with the rising
+wave over the board: its two rows are recomposited each frame, with BG palette 0 swapped by
+a scanline interrupt on those lines so the board's colours survive inside the banner.
 
 ### Differences from the original
 
@@ -42,6 +45,7 @@ in VBlank, and blended over the card or slot they overlap.
 - The title rings are animated by palette cycling instead of drawn circles.
 - When dealt, cards unfold in place instead of flying in from the top of the screen.
 - The opponent cards in the menu scroll together; they don't drift and dip as in the original.
+- The inactive box chip doesn't lift under the cursor (no sprite palette has its colours).
 - Music is an approximation: PICO-8 has four identical channels, the GB has two pulse,
   one wave and one noise channel, so voices are routed and custom instruments mapped.
 
@@ -73,11 +77,12 @@ To play on a Chromatic, copy `build/highstakes.gbc` to a GBC flash cartridge.
 |------|----------|
 | `tools/p8cart.py` | PICO-8 `.p8.png` reader |
 | `tools/gen_assets.py` | sprite sheet / font / audio → GBC tile, palette and data tables |
-| `src/main.c` | boot, interrupts (window split, input latch) |
+| `src/main.c` | boot, interrupts (window split, banner palette, input latch) |
 | `src/gfx.c` | canvases (software-rendered tile text), palettes and fades, sprites, frame loop |
 | `src/sound.c` | PICO-8 sfx/music player for the GB APU (own ROM bank) |
 | `src/game.c` | board gameplay, score panel, save data |
 | `src/lift.c` | the card hop / flip animation |
+| `src/wave.c` | the round banner's wave |
 | `src/scenes.c` | credits, title, intro, opponent menu, bonus question, winnings, ending |
 
 ## Credits & licence

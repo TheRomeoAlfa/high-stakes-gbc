@@ -5,6 +5,7 @@
 #include <rand.h>
 #include "common.h"
 #include "lift.h"
+#include "wave.h"
 
 uint8_t scene;
 int16_t blood, tries, chain, bchain;
@@ -179,6 +180,9 @@ static uint8_t chip_hi;   // slots >= chip_hi are unused (loops stop there)
 
 uint8_t gs[6];                // gchip state per slot (0 = gone)
 static uint8_t gs_drawn[6];
+// slot chips hop like the original's gchips: height, speed and rest height in 1/16 px.
+// While a chip is off its rest the slot shows the empty base and the chip is a sprite.
+static int8_t gz[6], gzd[6], gzb[6];
 uint8_t cur, oldcur, showcur, curchip, curchipi, curstab, curshake;
 static int16_t curx, cury;    // 8.8
 static int16_t stabx, stabdx, staby, stabdy;  // 12.4
@@ -379,12 +383,12 @@ static void hud_pass(void) {
     }
 }
 
-static void draw_slot(uint8_t i) {
+static void draw_slot(uint8_t i, uint8_t s) {
     static const uint8_t sidx[11] = {0, 1, 2, 3, 4, 0, 0, 0, 0, 5, 6};
-    uint8_t k = sidx[gs[i]];
+    uint8_t k = sidx[s];
     if (i < 3) lift_top[i] = k;
     map_put_vbl(slot_tx[i], slot_ty[i], 3, 2, slot_map + k * 6, slot_attr + k * 6);
-    gs_drawn[i] = gs[i];
+    gs_drawn[i] = s;
 }
 
 static void hud_all(void) {
@@ -667,7 +671,7 @@ static void cardflip(uint8_t ci) {
             if (!cards[lines[l][k]].hidden) n++;
         if (n == 3 && (gs[l] == 2 || gs[l] == 4 || gs[l] == 10)) {
             gs[l]--;
-            sfx(58);
+            gzd[l] = 24;   // 1.5 px/frame
         }
     }
     if (cards[ci].val == 10) endgame(EG_LOSE);
@@ -762,6 +766,7 @@ void bonusround(void) BANKED {
 // ------------------------------------------------------------------ input
 static void returnchip(void) {
     gs[curchipi] = curchip;
+    gzd[curchipi] = 13;   // 0.8 px/frame
     curchip = 0;
     sfx(59);
 }
@@ -827,8 +832,8 @@ static void dobutts(void) {
 }
 
 // ------------------------------------------------------------------ rendering
-static const uint8_t held_tile[10] = {0, SPR_CHIP_PLUS, 0, SPR_CHIP_ARROWS, 0, 0, 0, 0, 0, SPR_CHIP_BOX};
-static const uint8_t held_pal[10] = {0, SPRPAL_CHIP_PLUS, 0, SPRPAL_CHIP_ARROWS, 0, 0, 0, 0, 0, SPRPAL_CHIP_BOX};
+static const uint8_t held_tile[11] = {0, SPR_CHIP_PLUS, 0, SPR_CHIP_ARROWS, 0, 0, 0, 0, 0, SPR_CHIP_BOX, 0};
+static const uint8_t held_pal[11] = {0, SPRPAL_CHIP_PLUS, 0, SPRPAL_CHIP_ARROWS, 0, 0, 0, 0, 0, SPRPAL_CHIP_BOX, 0};
 
 static void draw_sprites(void) {
     uint8_t i;
@@ -886,6 +891,13 @@ static void draw_sprites(void) {
             else spr_put(c->x, sy, c->tile, c->pal);
         }
     }
+    // slot chips in the air (gs_drawn 0: the slot shows the empty base), and until the
+    // slot's own chip is back on screen (map blocks can be deferred a frame)
+    for (i = 0; i < 6; i++) {
+        uint8_t t = held_tile[gs[i]];
+        if (t && (!gs_drawn[i] || map_vbl_pending(slot_tx[i], slot_ty[i])))
+            spr_put16(slot_tx[i] * 8 + 5, slot_ty[i] * 8 + 3 - ((gz[i] + 15) >> 4), t, held_pal[gs[i]]);
+    }
     lift_sprites();   // card shadows under everything else
 }
 
@@ -927,8 +939,23 @@ static uint8_t help_update(void) {
 static void game_frame(void) {
     uint8_t i;
     doshake();
-    for (i = 0; i < 6; i++)
-        if (gs[i] != gs_drawn[i]) draw_slot(i);
+    for (i = 0; i < 6; i++) {
+        uint8_t s = gs[i];
+        if (s) {   // dochip: z += zd, gravity 0.25, bounce at |zd| > 1.5
+            int8_t z = gz[i] + gzd[i];
+            gzd[i] -= 4;
+            if (z <= gzb[i]) {
+                z = gzb[i];
+                if (gzd[i] < -24) {
+                    gzd[i] = (int8_t)((uint8_t)(-gzd[i]) * 5 >> 4);   // * 0.3
+                    sfx(58);
+                } else gzd[i] = 0;
+            }
+            gz[i] = z;
+            if (z && held_tile[s]) s = 0;
+        } else gz[i] = gzd[i] = 0;
+        if (s != gs_drawn[i]) draw_slot(i, s);
+    }
     lift_update();
     draw_sprites();
     if (gtxt_changed & 1) hud_pend |= HP_STAKES;
@@ -1033,6 +1060,9 @@ static void round_setup_visuals(void) {
     uint8_t i;
     lift_reset();
     for (i = 0; i < 9; i++) cards[i].fr = lift_cfr[i] = CARD_NONE;
+    memset(gz, 0, sizeof(gz));
+    memset(gzd, 0, sizeof(gzd));
+    memset(gzb, 0, sizeof(gzb));
     hud_all();   // before the swap, so its map rows are part of it
     board_reset_map();
     curx = (int16_t)curpos[cur - 1][0] << 8;
@@ -1098,14 +1128,15 @@ static void wait_board(uint8_t n) {
 static uint8_t score_phase(void) {
     // returns 1 = next round, 0 = match over
     int16_t wint = 100, wintstep = 60;
-    int16_t wy = 112 * 16, wyd;
+    int16_t wy = BAND_LY * 16, wyd;
     uint8_t nl = 0, i, blink = 0;
     const char *btxt = result == 3 ? "pass" : result == 1 ? "round won" : "round lost";
-    // window: banner + orange panel
+    // window: banner + orange panel; the banner rows fill with the wave first
     map_fill(1, 0, 0, 20, 18, TILE_SOLID(3), 0);
     cv_begin(&CV_BANNER, 2);
     cv_bignumc(btxt, 80, 3, 0, 0);
-    cv_draw(&CV_BANNER);
+    cv_flush(&CV_BANNER);   // shown once the wave is done
+    wave_begin();           // the loop's wave_frame lands with the window coming on
     win_split = 1;
     win_show = 1;
     help_drawn = 0;
@@ -1119,7 +1150,8 @@ static uint8_t score_phase(void) {
         WY_REG = (uint8_t)(wy >> 4);
         win_cut = (uint8_t)(wy >> 4);
         dochips();
-        if (wint <= 0 && pend_i < pend_n) {
+        if (wint <= 0 && pend_i < pend_n && wave_on) wave_end();   // first line next frame (its tiles)
+        else if (wint <= 0 && pend_i < pend_n) {
             i = pend_i++;
             cv_line.y = 2 + nl;
             cv_line.tile = 155 + nl * 20;
@@ -1167,6 +1199,7 @@ static uint8_t score_phase(void) {
                 return 1;   // the panel closes with the board swap (board_reset_map)
             }
         }
+        if (wave_on) wave_frame(wint);
         game_frame();
     }
 }
@@ -1267,7 +1300,14 @@ void scene_game(void) BANKED {
         if (curchip && cur >= 16) cur = oldcur;
         if (bonusmode && cur >= 16) cur = oldcur;
         if (curstab && (cur > 16 || (cur > 9 && cur < 16))) cur = oldcur;
-        if (oldcur != cur) sfx(63);
+        if (oldcur != cur) {
+            sfx(63);
+            memset(gzb, 0, sizeof(gzb));
+            if (!curchip && cur >= 10 && cur <= 15) {
+                uint8_t s = gs[cur - 10];
+                if (s == 1 || s == 3) gzb[cur - 10] = 16;   // (the original also lifts the inactive box)
+            }
+        }
         if (canact && !result) {
             showcur = 1;
             dobutts();
