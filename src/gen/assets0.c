@@ -212,7 +212,7 @@ const uint8_t card_fattr[480] = {
 };
 
 const uint16_t card_pals[16] = {
-  0,6280,10383,25368,0,6280,10327,10383,
+  0,6280,10383,25368,0,6280,10383,10327,
   0,25368,30687,19920,0,9547,19920,9247
 };
 
@@ -221,6 +221,47 @@ const uint8_t slot_map[42] = {
   15,16,17,18,7,19,20,7,21,22,13,23,24,25,26,27,
   28,29,30,31,11,32,13,14,33,16
 };
+
+const uint8_t *const lift_ptr[13] = {lift_b, lift_f2, lift_f3, lift_f4, lift_f5, lift_f6, lift_f7, lift_f8, lift_f9, lift_f10, lift_f11, lift_f12, lift_f13};
+
+uint8_t lift_bank(uint8_t g) {
+  switch (g) {
+  case 0: return BANK(lift_b);
+  case 1: return BANK(lift_f2);
+  case 2: return BANK(lift_f3);
+  case 3: return BANK(lift_f4);
+  case 4: return BANK(lift_f5);
+  case 5: return BANK(lift_f6);
+  case 6: return BANK(lift_f7);
+  case 7: return BANK(lift_f8);
+  case 8: return BANK(lift_f9);
+  case 9: return BANK(lift_f10);
+  case 10: return BANK(lift_f11);
+  case 11: return BANK(lift_f12);
+  case 12: return BANK(lift_f13);
+  default: return BANK(lift_shadow);
+  }
+}
+
+const uint8_t *const liftp_ptr[13] = {liftp_b, liftp_f2, liftp_f3, liftp_f4, liftp_f5, liftp_f6, liftp_f7, liftp_f8, liftp_f9, liftp_f10, liftp_f11, liftp_f12, liftp_f13};
+
+uint8_t liftp_bank(uint8_t g) {
+  switch (g) {
+  case 0: return BANK(liftp_b);
+  case 1: return BANK(liftp_f2);
+  case 2: return BANK(liftp_f3);
+  case 3: return BANK(liftp_f4);
+  case 4: return BANK(liftp_f5);
+  case 5: return BANK(liftp_f6);
+  case 6: return BANK(liftp_f7);
+  case 7: return BANK(liftp_f8);
+  case 8: return BANK(liftp_f9);
+  case 9: return BANK(liftp_f10);
+  case 10: return BANK(liftp_f11);
+  case 11: return BANK(liftp_f12);
+  default: return BANK(liftp_f13);
+  }
+}
 
 const uint8_t slot_attr[42] = {
   1,1,1,1,97,65,5,5,5,5,5,5,1,1,1,1,
@@ -242,7 +283,7 @@ const uint16_t obj_pals[32] = {
   0,10403,30687,0,0,10403,30687,9247,
   0,10403,9247,22335,0,10403,19920,25368,
   0,10327,10383,6280,0,21983,10383,6280,
-  0,21983,22335,30687,0,10327,9247,6280
+  0,21983,22335,30687,0,10327,9247,6242
 };
 
 const uint8_t whisky_map[20] = {

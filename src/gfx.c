@@ -725,7 +725,7 @@ void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint
 
 // map blocks queued for the next VBlank: tiles and attributes then change together
 // (written mid-frame, a block can show new attributes over old tiles for a frame)
-#define VQ_MAX 4
+#define VQ_MAX 8
 typedef struct { uint8_t x, y, w, h; const uint8_t *tiles, *attrs; } vq_t;
 static vq_t vq[VQ_MAX];
 static uint8_t vq_n;
@@ -749,10 +749,229 @@ void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tile
     j->x = x; j->y = y; j->w = w; j->h = h; j->tiles = tiles; j->attrs = attrs;
 }
 
+// CGB general-purpose DMA jobs for the next VBlank: 16-byte blocks, 16-byte aligned source
+// (ROM in rombank, or RAM) and destination. About 64 cycles per block with the CPU halted.
+#define VD_MAX 8
+typedef struct { const uint8_t *src; uint8_t *dst; uint8_t vbank, blocks, rombank; } vd_t;
+static vd_t vd[VD_MAX];
+static uint8_t vd_n;
+
+void vram_dma_vbl(const void *src, void *dst, uint8_t vbank, uint8_t blocks, uint8_t rombank) {
+    vd_t *j;
+    if (vd_n == VD_MAX) return;
+    j = &vd[vd_n++];
+    j->src = src;
+    j->dst = dst;
+    j->vbank = vbank;
+    j->blocks = blocks;
+    j->rombank = rombank;
+}
+
+static void vd_flush(void) {
+    uint8_t i, save = _current_bank;
+    vd_t *j = vd;
+    for (i = 0; i < vd_n; i++, j++) {
+        SWITCH_ROM(j->rombank);
+        VBK_REG = j->vbank;
+        HDMA1_REG = (uint16_t)j->src >> 8;
+        HDMA2_REG = (uint8_t)(uint16_t)j->src;
+        HDMA3_REG = (uint16_t)j->dst >> 8;
+        HDMA4_REG = (uint8_t)(uint16_t)j->dst;
+        HDMA5_REG = j->blocks - 1;   // bit 7 clear: general purpose, runs now
+    }
+    VBK_REG = 0;
+    SWITCH_ROM(save);
+    vd_n = 0;
+}
+
+// copies a w x h block to the map at vb_dst without waiting on STAT: VBlank only
+static uint8_t *vb_dst;
+static const uint8_t *vb_src;
+static uint8_t vb_w, vb_h;
+
+static void vb_blit(void) __naked {
+    __asm
+    ld  hl, #_vb_src
+    ld  a, (hl+)
+    ld  e, a
+    ld  d, (hl)
+    ld  hl, #_vb_dst
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  a, (_vb_h)
+    ld  b, a
+1$:
+    push hl
+    ld  a, (_vb_w)
+    ld  c, a
+2$:
+    ld  a, (de)
+    inc de
+    ld  (hl+), a
+    dec c
+    jr  nz, 2$
+    pop hl
+    ld  a, l
+    add a, #32
+    ld  l, a
+    jr  nc, 3$
+    inc h
+3$:
+    dec b
+    jr  nz, 1$
+    ret
+    __endasm;
+}
+
 static void vq_flush(void) {
     uint8_t i;
-    for (i = 0; i < vq_n; i++) vq_run(&vq[i]);
+    vq_t *j = vq;
+    for (i = 0; i < vq_n; i++, j++) {
+        if (j->tiles && LY_REG >= 144) {   // still in VBlank: fast path
+            vb_dst = map_addr(0, j->x, j->y);
+            vb_w = j->w;
+            vb_h = j->h;
+            vb_src = j->attrs;
+            VBK_REG = 1;
+            vb_blit();
+            vb_src = j->tiles;
+            VBK_REG = 0;
+            vb_blit();
+        } else vq_run(j);
+    }
     vq_n = 0;
+}
+
+// Card hop overlap row (see lift.c): for each of 3 tiles, out = base tile, with the card's
+// pixels from the ROM record (overlap counts at +15, masks at +18, tiles at +48) where its
+// mask is set. Runs here in bank 0 so it can map the record's bank.
+uint8_t lb_bank;
+const uint8_t *lb_rec;
+const uint8_t *lb_src[3];
+uint8_t *lb_out;
+static uint8_t lb_j;
+
+static void lb_blend(void) __naked {
+    __asm
+    xor a, a
+    ld  (_lb_j), a
+1$:
+    ; de = lb_src[j], hl = lb_out + j * 16
+    ld  a, (_lb_j)
+    add a, a
+    ld  e, a
+    ld  d, #0
+    ld  hl, #_lb_src
+    add hl, de
+    ld  a, (hl+)
+    ld  e, a
+    ld  d, (hl)
+    ld  a, (_lb_j)
+    swap a
+    ld  c, a
+    ld  b, #0
+    ld  hl, #_lb_out
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    add hl, bc
+    push hl
+    ld  c, #16
+2$:
+    ld  a, (de)
+    ld  (hl+), a
+    inc de
+    dec c
+    jr  nz, 2$
+    pop hl
+    ; card pixels? count at rec + 15 + j
+    ld  a, (_lb_j)
+    add a, #15
+    ld  c, a
+    ld  b, #0
+    push hl
+    ld  hl, #_lb_rec
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    add hl, bc
+    ld  a, (hl)
+    pop hl
+    or  a, a
+    jr  z, 4$
+    ; de = card tile rec + 48 + j * 16, bc = mask rec + 18 + j * 8
+    push hl
+    ld  a, (_lb_j)
+    swap a
+    add a, #48
+    ld  e, a
+    ld  a, (_lb_j)
+    add a, a
+    add a, a
+    add a, a
+    add a, #18
+    ld  c, a
+    ld  hl, #_lb_rec
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    push hl
+    ld  d, #0
+    add hl, de
+    ld  d, h
+    ld  e, l
+    pop hl
+    ld  b, #0
+    add hl, bc
+    ld  b, h
+    ld  c, l
+    pop hl
+    ld  a, #8
+3$:
+    push af
+    ld  a, (bc)
+    inc bc
+    push bc
+    ld  b, a
+    ld  a, (de)
+    xor a, (hl)
+    and a, b
+    xor a, (hl)
+    ld  (hl+), a
+    inc de
+    ld  a, (de)
+    xor a, (hl)
+    and a, b
+    xor a, (hl)
+    ld  (hl+), a
+    inc de
+    pop bc
+    pop af
+    dec a
+    jr  nz, 3$
+4$:
+    ld  hl, #_lb_j
+    inc (hl)
+    ld  a, (hl)
+    cp  a, #3
+    jp  nz, 1$
+    ret
+    __endasm;
+}
+
+void lift_blend(void) {
+    uint8_t save = _current_bank;
+    SWITCH_ROM(lb_bank);
+    lb_blend();
+    SWITCH_ROM(save);
+}
+
+void banked_copy(void *dst, uint8_t rombank, const void *src, uint16_t n) {
+    uint8_t save = _current_bank;
+    SWITCH_ROM(rombank);
+    memcpy(dst, src, n);
+    SWITCH_ROM(save);
 }
 
 void load_bkg_banked(uint8_t rombank, const uint8_t *src, uint8_t first, uint8_t n, uint8_t vbank) {
@@ -1061,6 +1280,8 @@ extern volatile uint8_t joy_latch;
 void frame(void) {
     spr_end();
     vsync();
+    // VBlank work: DMA first (it must finish before the screen starts), then map blocks
+    if (vd_n) vd_flush();
     if (vq_n) vq_flush();
     if (!fading_out && fadelvl) {
         fadelvl--;
@@ -1120,7 +1341,7 @@ void screen_on(void) {
 }
 
 void clear_bg(void) {
-    vq_n = 0;
+    vq_n = vd_n = 0;
     cv_invalidate();
     // rows 0-17 of both maps are contiguous 32-byte rows
     VBK_REG = 1;

@@ -12,7 +12,7 @@ opponent from the original, with its music, redrawn for a 160x144 screen.
 
 ![screens](screenshots.png)
 
-The ROM is `build/highstakes.gbc` (MBC5 + battery-backed SRAM, CGB-only).
+The ROM is `build/highstakes.gbc` (256 KB, MBC5 + battery-backed SRAM, CGB-only).
 
 ## What's ported
 
@@ -31,14 +31,17 @@ decoded from the cart):
   cards remain
 
 All graphics come from the original sprite sheet, converted at build time: tiles are
-quantised to GBC palettes (4 colours per 8x8 tile, 8 palettes), cards are redrawn at
-21x29 to suit the 160x144 screen, and the card flip uses pre-rendered squash frames.
+quantised to GBC palettes (4 colours per 8x8 tile, 8 palettes) and cards are redrawn at
+21x29 to suit the 160x144 screen. Flipped cards hop and turn over a drop shadow like the
+original's: all 21 frames of the flip are pre-rendered per card, streamed to VRAM by CGB DMA
+in VBlank, and blended over the card or slot they overlap.
 
 ### Differences from the original
 
 - Text uses PICO-8's 3x5 font, software-rendered into tiles.
 - The title rings are animated by palette cycling instead of drawn circles.
-- No card "lift" on hover or wobble animations.
+- When dealt, cards unfold in place instead of flying in from the top of the screen.
+- The opponent cards in the menu scroll together; they don't drift and dip as in the original.
 - Music is an approximation: PICO-8 has four identical channels, the GB has two pulse,
   one wave and one noise channel, so voices are routed and custom instruments mapped.
 
@@ -74,6 +77,7 @@ To play on a Chromatic, copy `build/highstakes.gbc` to a GBC flash cartridge.
 | `src/gfx.c` | canvases (software-rendered tile text), palettes and fades, sprites, frame loop |
 | `src/sound.c` | PICO-8 sfx/music player for the GB APU (own ROM bank) |
 | `src/game.c` | board gameplay, score panel, save data |
+| `src/lift.c` | the card hop / flip animation |
 | `src/scenes.c` | credits, title, intro, opponent menu, bonus question, winnings, ending |
 
 ## Credits & licence

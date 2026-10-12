@@ -423,7 +423,242 @@ def edge_img():
 
 
 FRONT_PAL = [0, 10, 2, 6]
-BACK_PAL = [0, 10, 9, 2]
+BACK_PAL = [0, 10, 2, 9]   # indices 0-2 match FRONT_PAL (lifted cards blend over both)
+
+# --------------------------------------------------------------------------- card hop / flip
+# The original flips a card by redrawing it column by column at an angle (rot 0 -> 1 on the back,
+# -1 -> 0 on the face, 0.1 per frame) while it hops up (zd=1.4, gravity 0.15) over a drop shadow.
+# Each of the 21 frames is pre-rendered into a 3x5 tile region: the row of tiles above the card's
+# cell (where the lifted card overlaps its neighbour) and the 3x4 cell itself.
+
+# Records are padded to 16-byte blocks: the tiles are copied to VRAM by CGB DMA straight from
+# ROM, which needs 16-byte aligned sources (the lift files sit alone at the start of their banks).
+LIFT_REC = 48 + 3 * 16 + 12 * 16   # header (palettes 0-14, overlap counts 15-17, masks 18-41),
+#                                    overlap tiles, cell tiles
+LIFT_SHREC = 16 + 12 * 16          # used-sprite mask, shadow sprite tiles
+
+
+def lift_motion():
+    z, zd, out = 0.0, 1.4, []
+    for k in range(1, 22):
+        z += zd
+        zd -= 0.15
+        if z <= 0:
+            z, zd = 0.0, 0.0
+        if k <= 10:
+            rot = min(0.1 * k, 0.9995)        # k=10: edge-on, one column wide
+        elif k == 11:
+            rot = None                        # face side at rot=-1: nothing drawn
+        else:
+            rot = -1 + 0.1 * (k - 11)
+        out.append((z, rot))
+    return out
+
+
+def lift_region(img, z, rot):
+    """24x40 image: rows 0-7 = tile row above the cell, rows 8-39 = the cell."""
+    out = blank(24, 40)
+    if rot is None:
+        return out
+    angx = math.cos(math.pi * rot / 2)
+    angy = -math.sin(math.pi * rot / 2)
+    for x in range(21):
+        col = math.floor((x - 10) / angx + 10)
+        if not 0 <= col <= 20:
+            continue
+        off = math.floor(0.5 - (x - 10) * 0.5 * angy - z)
+        for y in range(29):
+            c = img[y][col]
+            if c != T:
+                yy = 8 + OY + y + off
+                assert yy >= 0, 'lifted card leaves its region'
+                out[yy][OX + x] = c
+    return out
+
+
+def lift_record(reg, card_pals, pref):
+    """pref: palette tried first, so a tile that fits several keeps one palette across frames"""
+    pals, tiles, masks, cnts = [], [], [], []
+    order = [pref] + [i for i in range(len(card_pals)) if i != pref]
+    for ty in range(5):
+        for tx in range(3):
+            t = [[0 if c == T else c for c in r[tx * 8:tx * 8 + 8]] for r in reg[ty * 8:ty * 8 + 8]]
+            pi = min(order, key=lambda i: tile_err(t, card_pals[i]))
+            pals.append(1 + pi)
+            tiles += enc_tile(map_tile(t, card_pals[pi]))
+            if ty == 0:
+                m = []
+                for r in reg[0:8]:
+                    v = 0
+                    for x in range(8):
+                        if r[tx * 8 + x] != T:
+                            v |= 0x80 >> x
+                    m.append(v)
+                masks += m
+                cnts.append(sum(bin(v).count('1') for v in m))
+    rec = pals + cnts + masks + [0] * 6 + tiles
+    assert len(rec) == LIFT_REC
+    return rec
+
+
+def lift_shadow(reg, rot):
+    """Shadow sprites (3x2 of 8x16) for the cell: the card silhouette at rest, 1px right/down,
+    narrowed like the card, minus wherever the lifted card covers it."""
+    w = 0 if rot is None else math.floor(21 * math.cos(math.pi * rot / 2) + 1e-9)
+    sh = blank(24, 32, 0)
+    if w > 0:
+        x0 = OX + 1 + (21 - w) // 2
+        for y in range(OY + 1, OY + 30):
+            for x in range(x0, x0 + w):
+                corner = w > 2 and x in (x0, x0 + w - 1) and y in (OY + 1, OY + 29)
+                if not corner and reg[8 + y][x] == T:
+                    sh[y][x] = 3
+    data, used = [], 0
+    for r in range(2):
+        for c in range(3):
+            part = [row[c * 8:c * 8 + 8] for row in sh[r * 16:r * 16 + 16]]
+            if any(v for row in part for v in row):
+                used |= 1 << (r * 3 + c)
+            data += enc_tile(part[:8]) + enc_tile(part[8:])
+    return [used] + [0] * 15 + data
+
+
+def lift_base_ent(pal, px):
+    """palette number, non-zero pixel count (unused at run time), 16 bytes of tile"""
+    return [pal, sum(1 for r in px for v in r if v)] + list(enc_tile(px))
+
+
+def board_lut(src, dst):
+    """nearest colour of each src palette entry in dst, as lift.c's lift_luts computes it"""
+    def c5(c):
+        r, g, b = PICO[c]
+        return r >> 3, g >> 3, b >> 3
+    out = []
+    for a in src:
+        ra, ga, ba = c5(a)
+        best, bd = 0, None
+        for j, b in enumerate(dst):
+            rb, gb, bb = c5(b)
+            d = 2 * (ra - rb) ** 2 + 4 * (ga - gb) ** 2 + 3 * (ba - bb) ** 2
+            if bd is None or d < bd:
+                best, bd = j, d
+        out.append(best)
+    return out
+
+
+def lift_frames(faces, back, card_pals, slot_bot, slot_pals):
+    motion = lift_motion()
+    # back side: frames k=1..10; face side: k=12..21 per card value (k=11 is blank)
+    # (the back group ends with the blank k=11 frame)
+    groups = [('lift_b', back, range(0, 11))] + [('lift_f%d' % v, faces[v], range(11, 21)) for v in range(2, 14)]
+    names = []
+    for gi, (name, img, ks) in enumerate(groups):
+        data = []
+        for k in ks:
+            z, rot = motion[k]
+            k1 = 11 if k == 10 and name == 'lift_b' else k + 1
+            data += lift_record(lift_region(img, z, rot) if k1 != 11 else blank(24, 40), card_pals,
+                                1 if name == 'lift_b' else 0)
+        carr(name, data, banked=True, tgt=LIFTF[gi * 4 // len(groups)])
+        names.append(name)
+    shadow = []
+    for k in range(21):
+        z, rot = motion[k]
+        shadow += lift_shadow(lift_region(back, z, rot), rot)
+    carr('lift_shadow', shadow, banked=True, tgt=LIFTF[3])
+    define('LIFT_REC', LIFT_REC)
+    define('LIFT_SHREC', LIFT_SHREC)
+    C0.append('const uint8_t *const lift_ptr[%d] = {%s};\n' % (len(names), ', '.join(names)))
+    H.append('extern const uint8_t *const lift_ptr[%d];' % len(names))
+    C0.append('uint8_t lift_bank(uint8_t g) {\n  switch (g) {\n' +
+              ''.join('  case %d: return BANK(%s);\n' % (i, n) for i, n in enumerate(names)) +
+              '  default: return BANK(lift_shadow);\n  }\n}\n')
+    H.append('uint8_t lift_bank(uint8_t g);   // g = 0 back, 1 + value - 2 faces, 255 shadow')
+    # what the lifted card overlaps: the bottom tile row of a card frame at rest (back, faces 2..13)
+    # or of a top slot (7 kinds), as palette number + plain 2bpp tile (no flips)
+    bases = []
+    frames = [cell(back)] + [cell(faces[v]) for v in range(2, 14)]
+    for fr in frames:
+        for tx in range(3):
+            t = [[0 if c == T else c for c in r[tx * 8:tx * 8 + 8]] for r in fr[24:32]]
+            pi = min(range(len(card_pals)), key=lambda i: tile_err(t, card_pals[i]))
+            bases.append((1 + pi, map_tile(t, card_pals[pi])))
+    bases += slot_bot
+    bot = []
+    for pal, px in bases:
+        bot += lift_base_ent(pal, px)
+    carr('lift_base_data', bot, banked=True, tgt=LIFTF[3])
+    # The common overlaps, pre-blended: the 7 top slot kinds (variants 0-6) and a card back
+    # (variant 7). Each record: 8 x (3 tiles, 3 palettes, padding) = 512 bytes.
+    board = {1: card_pals[0], 2: card_pals[1], 3: card_pals[2], 4: card_pals[3]}
+    board.update({5: slot_pals[1], 6: slot_pals[2], 7: slot_pals[3]})
+    variants = [bases[(13 + k) * 3:(14 + k) * 3] for k in range(7)] + [bases[0:3]]
+    pnames = []
+    for gi, (name, img, ks) in enumerate(groups):
+        data = []
+        for k in ks:
+            z, rot = motion[k]
+            k1 = 11 if k == 10 and name == 'lift_b' else k + 1
+            reg = lift_region(img, z, rot) if k1 != 11 else blank(24, 40)
+            pref = 1 if name == 'lift_b' else 0
+            order = [pref] + [i for i in range(len(card_pals)) if i != pref]
+            cards3 = []
+            for tx in range(3):
+                rows = [r[tx * 8:tx * 8 + 8] for r in reg[0:8]]
+                t = [[0 if c == T else c for c in r] for r in rows]
+                pi = min(order, key=lambda i: tile_err(t, card_pals[i]))
+                cards3.append((1 + pi, map_tile(t, card_pals[pi]), [[c != T for c in r] for r in rows]))
+            for var in variants:
+                tiles, pals = [], []
+                for (bp, bpx), (cp, cpx, msk) in zip(var, cards3):
+                    cnt = sum(1 for r in msk for m in r if m)
+                    bcnt = sum(1 for r in bpx for v in r if v)
+                    if cnt and bcnt <= cnt:     # mostly card: recolour the base
+                        lut = board_lut(board[bp], board[cp])
+                        bpx = [[lut[v] for v in r] for r in bpx]
+                        bp = cp
+                    elif cnt:                   # mostly base: recolour the card's pixels
+                        lut = board_lut(board[cp], board[bp])
+                        cpx = [[lut[v] for v in r] for r in cpx]
+                    out = [[cpx[y][x] if msk[y][x] else bpx[y][x] for x in range(8)] for y in range(8)]
+                    tiles += enc_tile(out)
+                    pals.append(bp)
+                data += tiles + pals + [0] * 13
+        pn = name.replace('lift_', 'liftp_')
+        carr(pn, data, banked=True, tgt=LIFTP[gi // 2])
+        pnames.append(pn)
+    define('LIFT_PREREC', 512)
+    C0.append('const uint8_t *const liftp_ptr[%d] = {%s};\n' % (len(pnames), ', '.join(pnames)))
+    H.append('extern const uint8_t *const liftp_ptr[%d];' % len(pnames))
+    C0.append('uint8_t liftp_bank(uint8_t g) {\n  switch (g) {\n' +
+              ''.join('  case %d: return BANK(%s);\n' % (i, n) for i, n in enumerate(pnames[:-1])) +
+              '  default: return BANK(%s);\n  }\n}\n' % pnames[-1])
+    H.append('uint8_t liftp_bank(uint8_t g);')
+    print('lift data', sum(len(x) for part in LIFTF for x in part) // 6, 'bytes (approx)')
+    # preview: all 21 frames of a 5 flip
+    prev = blank(24 * 21, 40, 4)
+    for k in range(21):
+        z, rot = motion[k]
+        reg = lift_region(back if k < 10 else faces[5], z, rot)
+        sh = lift_shadow(reg, rot)
+        for y in range(40):
+            for x in range(24):
+                if reg[y][x] != T:
+                    prev[y][k * 24 + x] = reg[y][x]
+                else:
+                    prev[y][k * 24 + x] = 0
+        # shadow overlay (cell rows)
+        for r in range(2):
+            for c in range(3):
+                base = 16 + (r * 3 + c) * 32
+                for half in range(2):
+                    tb = sh[base + half * 16: base + half * 16 + 16]
+                    for yy in range(8):
+                        for xx in range(8):
+                            if (tb[yy * 2] >> (7 - xx)) & 1:
+                                prev[8 + r * 16 + half * 8 + yy][k * 24 + c * 8 + xx] = 4
+    wpng('lift.png', prev)
+
 
 # --------------------------------------------------------------------------- outputs
 
@@ -432,8 +667,15 @@ PREVIEW = os.path.join(ROOT, 'build', 'preview')
 os.makedirs(PREVIEW, exist_ok=True)
 
 
-def carr(name, data, typ='uint8_t', banked=False, per=16):
-    tgt = CB if banked else C0
+LIFTF = [[], [], [], []]   # src/gen/lift0..3.c: card hop/flip animation, each alone in a fixed bank
+LIFT_BANK0 = 12
+LIFTP = [[] for _ in range(7)]   # src/gen/liftp0..6.c: pre-blended overlap rows, banks 5-11
+LIFTP_BANK0 = 5
+
+
+def carr(name, data, typ='uint8_t', banked=False, per=16, tgt=None):
+    if tgt is None:
+        tgt = CB if banked else C0
     body = ',\n'.join('  ' + ','.join(str(v) for v in data[i:i + per]) for i in range(0, len(data), per))
     if banked:
         tgt.append(f'BANKREF({name})')
@@ -570,6 +812,7 @@ def main():
 
     slot_pals = [FRONT_PAL, [0, 1, 7, 8], [0, 1, 8, 15], [0, 1, 13, 6]]
     smaps, sattrs = [], []
+    slot_bot = []   # per slot kind: bottom-row tiles as (palette number, 8x8 indices)
     prev = blank(24 * 7, 16, 0)
     for k, s in enumerate([0, 1, 2, 3, 4, 9, 10]):
         img = blank(24, 16)
@@ -587,12 +830,15 @@ def main():
             tile = gpool.tiles[t - 1]
             px = [[((tile[r * 2] >> (7 - x)) & 1) | (((tile[r * 2 + 1] >> (7 - x)) & 1) << 1) for x in range(8)] for r in range(8)]
             px = flip_t(px, a & 0x20, a & 0x40)
+            if i >= 3:
+                slot_bot.append((a & 7, px))
             for y in range(8):
                 for x in range(8):
                     im[(i // 3) * 8 + y][(i % 3) * 8 + x] = rp[a & 7][px[y][x]]
         blit(prev, im, k * 24, 0)
     wpng('slots.png', prev)
     carr('slot_map', smaps)
+    lift_frames(faces, back, card_pals, slot_bot, slot_pals)
     carr('slot_attr', sattrs)
     # sepline: 20 tiles, line at y=3, x 8..151, caps "aa2a2a"
     sep = blank(160, 8, 0)
@@ -611,7 +857,7 @@ def main():
 
     # ---------------- sprites (bank 0, sprite tiles 0..127, 8x16)
     sp = SprPool(128)
-    OPAL = [[1, 7, 0], [1, 7, 8], [1, 8, 15], [1, 13, 6], [9, 2, 10], [14, 2, 10], [14, 15, 7], [9, 8, 10]]
+    OPAL = [[1, 7, 0], [1, 7, 8], [1, 8, 15], [1, 13, 6], [9, 2, 10], [14, 2, 10], [14, 15, 7], [9, 8, 4]]   # pal 7 slot 3: card shadow
     spr_defs = []
 
     def sdef(name, img, pal, keep_empty=False):
@@ -809,6 +1055,14 @@ def main():
         f.write('// generated by tools/gen_assets.py: PICO-8 sfx/music data (included by sound.c)\n' + '\n'.join(AUD))
     with open(os.path.join(ROOT, 'src', 'gen', 'assetsb.c'), 'w') as f:
         f.write('// generated by tools/gen_assets.py\n#pragma bank 255\n#include "assets.h"\n\n' + '\n'.join(CB))
+    for i, part in enumerate(LIFTP):
+        with open(os.path.join(ROOT, 'src', 'gen', 'liftp%d.c' % i), 'w') as f:
+            f.write('// generated by tools/gen_assets.py: pre-blended card hop overlap rows\n#pragma bank %d\n'
+                    '#include "assets.h"\n\n' % (LIFTP_BANK0 + i) + '\n'.join(part))
+    for i, part in enumerate(LIFTF):
+        with open(os.path.join(ROOT, 'src', 'gen', 'lift%d.c' % i), 'w') as f:
+            f.write('// generated by tools/gen_assets.py: card hop/flip frames\n#pragma bank %d\n'
+                    '#include "assets.h"\n\n' % (LIFT_BANK0 + i) + '\n'.join(part))
 
 
 if __name__ == '__main__':

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <rand.h>
 #include "common.h"
+#include "lift.h"
 
 uint8_t scene;
 int16_t blood, tries, chain, bchain;
@@ -160,6 +161,7 @@ typedef struct {
     uint8_t val, hidden, hint, had1, had3, badstab;
     uint8_t ani;     // 0 none, 1 flip, 2 deal
     uint8_t t, fr, delay;
+    uint8_t lift;    // flip drawn as a hop: lift slot + 1 (0 = drawn with plain frames)
 } card_t;
 static card_t cards[9];
 static uint8_t vcard, autoflip;
@@ -380,7 +382,8 @@ static void hud_pass(void) {
 static void draw_slot(uint8_t i) {
     static const uint8_t sidx[11] = {0, 1, 2, 3, 4, 0, 0, 0, 0, 5, 6};
     uint8_t k = sidx[gs[i]];
-    map_put(0, slot_tx[i], slot_ty[i], 3, 2, slot_map + k * 6, slot_attr + k * 6);
+    if (i < 3) lift_top[i] = k;
+    map_put_vbl(slot_tx[i], slot_ty[i], 3, 2, slot_map + k * 6, slot_attr + k * 6);
     gs_drawn[i] = gs[i];
 }
 
@@ -398,7 +401,7 @@ static void hud_all(void) {
 
 static void set_card_fr(uint8_t i, uint8_t fr) {
     if (cards[i].fr == fr) return;
-    cards[i].fr = fr;
+    cards[i].fr = lift_cfr[i] = fr;
     if (fr == CARD_NONE) map_put_vbl(CELLX(i), CELLY(i), 3, 4, 0, 0);
     else map_put_vbl(CELLX(i), CELLY(i), 3, 4, card_fmap + fr * 12, card_fattr + fr * 12);
 }
@@ -406,6 +409,24 @@ static void set_card_fr(uint8_t i, uint8_t fr) {
 static uint8_t face_of(uint8_t i) {
     uint8_t v = cards[i].val;
     return v == 10 ? vampval : v;
+}
+
+// card hop / flip: see lift.c
+static void card_land(uint8_t ci) {
+    uint8_t a, f;
+    lift_end(cards[ci].lift);
+    cards[ci].lift = 0;
+    set_card_fr(ci, CF_FACE(face_of(ci)));
+    // give the overlapped tile row back to its owner
+    if (ci < 3) gs_drawn[ci] = 255;
+    else {
+        a = ci - 3;
+        if (!cards[a].lift) {
+            f = cards[a].fr;
+            cards[a].fr = LIFT_FR_LIFTED;
+            set_card_fr(a, f);
+        }
+    }
 }
 
 // ------------------------------------------------------------------ chips
@@ -865,6 +886,7 @@ static void draw_sprites(void) {
             else spr_put(c->x, sy, c->tile, c->pal);
         }
     }
+    lift_sprites();   // card shadows under everything else
 }
 
 static void doshake(void) {
@@ -905,9 +927,10 @@ static uint8_t help_update(void) {
 static void game_frame(void) {
     uint8_t i;
     doshake();
-    draw_sprites();
     for (i = 0; i < 6; i++)
         if (gs[i] != gs_drawn[i]) draw_slot(i);
+    lift_update();
+    draw_sprites();
     if (gtxt_changed & 1) hud_pend |= HP_STAKES;
     if (gtxt_changed & 2) hud_pend |= HP_WINV;
     gtxt_changed = 0;
@@ -943,6 +966,7 @@ static void board_setup(void) {
     set_bgpal(6, 0, 1, 8, 15);
     set_bgpal(7, 0, 1, 13, 6);
     copy_objpals(0, 8, obj_pals);
+    lift_luts();
     map_put(0, 0, 14, 20, 1, sep_map, sep_attr);
     cv_begin(&CV_STLBL, 0);
     cv_cprint("stakes", 24, 1, 1);
@@ -958,6 +982,7 @@ static void board_setup(void) {
 
 static void round_setup_visuals(void) {
     uint8_t i;
+    lift_reset();
     for (i = 0; i < 9; i++) {
         cards[i].fr = 254;
         set_card_fr(i, CARD_NONE);
@@ -992,7 +1017,9 @@ static uint8_t do_cards(void) {
         } else if (c->ani == 1) {
             uint8_t t = c->t, f = CF_FACE(face_of(i));
             noani = 0;
-            if (t < 3) set_card_fr(i, CF_BACK);
+            if (t == 0 && (c->lift = lift_begin(i))) c->fr = LIFT_FR_LIFTED;
+            if (c->lift) lift_set(i, t, face_of(i));
+            else if (t < 3) set_card_fr(i, CF_BACK);
             else if (t < 6) set_card_fr(i, CF_BACK + 1);
             else if (t < 9) set_card_fr(i, CF_BACK + 2);
             else if (t < 10) set_card_fr(i, CF_EDGE);
@@ -1005,7 +1032,10 @@ static uint8_t do_cards(void) {
             }
             if (t < 10) canact = 0;
             c->t++;
-            if (c->t > 20) c->ani = 0;
+            if (c->t > 20) {
+                c->ani = 0;
+                if (c->lift) card_land(i);
+            }
         }
     }
     return noani | (canact << 1);

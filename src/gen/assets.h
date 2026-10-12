@@ -19,6 +19,69 @@ extern const uint8_t card_fmap[480];
 extern const uint8_t card_fattr[480];
 extern const uint16_t card_pals[16];
 extern const uint8_t slot_map[42];
+extern const uint8_t lift_b[3168];
+BANKREF_EXTERN(lift_b)
+extern const uint8_t lift_f2[2880];
+BANKREF_EXTERN(lift_f2)
+extern const uint8_t lift_f3[2880];
+BANKREF_EXTERN(lift_f3)
+extern const uint8_t lift_f4[2880];
+BANKREF_EXTERN(lift_f4)
+extern const uint8_t lift_f5[2880];
+BANKREF_EXTERN(lift_f5)
+extern const uint8_t lift_f6[2880];
+BANKREF_EXTERN(lift_f6)
+extern const uint8_t lift_f7[2880];
+BANKREF_EXTERN(lift_f7)
+extern const uint8_t lift_f8[2880];
+BANKREF_EXTERN(lift_f8)
+extern const uint8_t lift_f9[2880];
+BANKREF_EXTERN(lift_f9)
+extern const uint8_t lift_f10[2880];
+BANKREF_EXTERN(lift_f10)
+extern const uint8_t lift_f11[2880];
+BANKREF_EXTERN(lift_f11)
+extern const uint8_t lift_f12[2880];
+BANKREF_EXTERN(lift_f12)
+extern const uint8_t lift_f13[2880];
+BANKREF_EXTERN(lift_f13)
+extern const uint8_t lift_shadow[4368];
+BANKREF_EXTERN(lift_shadow)
+#define LIFT_REC 288
+#define LIFT_SHREC 208
+extern const uint8_t *const lift_ptr[13];
+uint8_t lift_bank(uint8_t g);   // g = 0 back, 1 + value - 2 faces, 255 shadow
+extern const uint8_t lift_base_data[1080];
+BANKREF_EXTERN(lift_base_data)
+extern const uint8_t liftp_b[5632];
+BANKREF_EXTERN(liftp_b)
+extern const uint8_t liftp_f2[5120];
+BANKREF_EXTERN(liftp_f2)
+extern const uint8_t liftp_f3[5120];
+BANKREF_EXTERN(liftp_f3)
+extern const uint8_t liftp_f4[5120];
+BANKREF_EXTERN(liftp_f4)
+extern const uint8_t liftp_f5[5120];
+BANKREF_EXTERN(liftp_f5)
+extern const uint8_t liftp_f6[5120];
+BANKREF_EXTERN(liftp_f6)
+extern const uint8_t liftp_f7[5120];
+BANKREF_EXTERN(liftp_f7)
+extern const uint8_t liftp_f8[5120];
+BANKREF_EXTERN(liftp_f8)
+extern const uint8_t liftp_f9[5120];
+BANKREF_EXTERN(liftp_f9)
+extern const uint8_t liftp_f10[5120];
+BANKREF_EXTERN(liftp_f10)
+extern const uint8_t liftp_f11[5120];
+BANKREF_EXTERN(liftp_f11)
+extern const uint8_t liftp_f12[5120];
+BANKREF_EXTERN(liftp_f12)
+extern const uint8_t liftp_f13[5120];
+BANKREF_EXTERN(liftp_f13)
+#define LIFT_PREREC 512
+extern const uint8_t *const liftp_ptr[13];
+uint8_t liftp_bank(uint8_t g);
 extern const uint8_t slot_attr[42];
 extern const uint8_t sep_map[20];
 extern const uint8_t sep_attr[20];

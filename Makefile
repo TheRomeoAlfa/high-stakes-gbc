@@ -8,16 +8,18 @@ CFLAGS = -Wf--opt-code-size -Isrc
 # hot paths (rendering, sound) are optimised for speed
 FASTFLAGS = -Wf--opt-code-speed -Wf--max-allocs-per-node50000
 
-SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/gen/assets0.c src/gen/assetsb.c
+GEN = src/gen/assets0.c src/gen/assetsb.c src/gen/lift0.c src/gen/lift1.c src/gen/lift2.c src/gen/lift3.c \
+      $(patsubst %,src/gen/liftp%.c,0 1 2 3 4 5 6)
+SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/lift.c $(GEN)
 OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
 ROM = build/highstakes.gbc
 
 all: $(ROM)
 
-src/gen/assets.h src/gen/assets0.c src/gen/assetsb.c: tools/gen_assets.py tools/p8cart.py assets/highstakes.p8.png
+src/gen/assets.h $(GEN): tools/gen_assets.py tools/p8cart.py assets/highstakes.p8.png
 	$(PYTHON) tools/gen_assets.py
 
-build/obj/gfx.o build/obj/sound.o: CFLAGS += $(FASTFLAGS)
+build/obj/gfx.o build/obj/sound.o build/obj/lift.o: CFLAGS += $(FASTFLAGS)
 
 build/obj/%.o: src/%.c src/gen/assets.h src/*.h
 	@mkdir -p $(dir $@)
@@ -25,6 +27,7 @@ build/obj/%.o: src/%.c src/gen/assets.h src/*.h
 
 $(ROM): $(OBJ)
 	$(LCC) $(LCCFLAGS) -o $@ $(OBJ)
+	$(PYTHON) tools/check_align.py build/highstakes.noi
 
 clean:
 	rm -rf build/obj $(ROM)
