@@ -762,13 +762,12 @@ void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tile
 }
 
 // CGB general-purpose DMA jobs for the next VBlank: 16-byte blocks, 16-byte aligned source
-// (ROM in rombank, or RAM) and destination, the CPU halted meanwhile. In double speed a
-// block takes up to a fifth of a line (SameBoy), and a transfer still running once the
-// screen is drawn writes stray bytes into both VRAM banks (the PPU's fetches collide with
-// it). So each VBlank sends what fits, splitting a job if need be, and the rest waits;
-// map blocks wait with it (frame), so tiles and map stay in step.
+// (ROM in rombank, or RAM) and destination, the CPU halted meanwhile (64 cycles a block in
+// double speed, 14 a line). A transfer still running once the screen is drawn writes stray
+// bytes into both VRAM banks (the PPU's fetches collide with it), so each VBlank sends the
+// jobs that end in time and the rest wait (every job fits a whole VBlank); map blocks wait
+// with them (frame), so tiles and map stay in step.
 #define VD_MAX 12
-#define VD_PER_LINE 5
 typedef struct { const uint8_t *src; uint8_t *dst; uint8_t vbank, blocks, rombank; } vd_t;
 static vd_t vd[VD_MAX];
 static uint8_t vd_n;
@@ -788,33 +787,93 @@ uint8_t vram_dma_busy(void) {
     return vd_n;
 }
 
-static uint8_t vd_flush(void) {   // 1 = all sent
-    uint8_t i, n, save = _current_bank;
-    vd_t *j = vd;
-    for (i = 0; i < vd_n; i++, j++) {
-        n = LY_REG;
-        if (n < 144 || n > 151) break;
-        n = (153 - n) * VD_PER_LINE;   // blocks that end in time, a line spare
-        if (n > j->blocks) n = j->blocks;
-        SWITCH_ROM(j->rombank);
-        VBK_REG = j->vbank;
-        HDMA1_REG = (uint16_t)j->src >> 8;
-        HDMA2_REG = (uint8_t)(uint16_t)j->src;
-        HDMA3_REG = (uint16_t)j->dst >> 8;
-        HDMA4_REG = (uint8_t)(uint16_t)j->dst;
-        HDMA5_REG = n - 1;   // bit 7 clear: general purpose, runs now
-        if (n < j->blocks) {
-            j->src += (uint16_t)n << 4;
-            j->dst += (uint16_t)n << 4;
-            j->blocks -= n;
-            break;
-        }
-    }
-    VBK_REG = 0;
-    SWITCH_ROM(save);
-    for (n = 0; i < vd_n; ) vd[n++] = vd[i++];
-    vd_n = n;
-    return !n;
+// vd_t is 7 bytes: src, dst, vbank, blocks, rombank. Jobs go while LY is 144-151 and the
+// job's blocks fit (153 - LY) * 12; the rest move to the front of the queue.
+static void vd_flush(void) __naked {
+    __asm
+    ld  a, (__current_bank)
+    push af
+    ld  hl, #_vd
+    ld  a, (_vd_n)
+    ld  c, a
+1$:
+    ld  a, c
+    or  a, a
+    jr  z, 9$
+    ldh a, (_LY_REG + 0)
+    cp  a, #144
+    jr  c, 8$
+    cp  a, #152
+    jr  nc, 8$
+    ld  b, a
+    ld  a, #153
+    sub a, b
+    add a, a
+    add a, a
+    ld  b, a
+    add a, a
+    add a, b
+    ld  b, a                ; blocks that end in time
+    push hl
+    ld  de, #5
+    add hl, de
+    ld  a, (hl)             ; job blocks
+    pop hl
+    cp  a, b
+    jr  z, 2$
+    jr  nc, 8$
+2$:
+    dec a
+    ld  b, a
+    ld  a, (hl+)
+    ld  e, a
+    ld  a, (hl+)
+    ldh (_HDMA1_REG + 0), a
+    ld  a, e
+    ldh (_HDMA2_REG + 0), a
+    ld  a, (hl+)
+    ld  e, a
+    ld  a, (hl+)
+    ldh (_HDMA3_REG + 0), a
+    ld  a, e
+    ldh (_HDMA4_REG + 0), a
+    ld  a, (hl+)
+    ldh (_VBK_REG + 0), a
+    inc hl
+    ld  a, (hl+)
+    ld  (__current_bank), a
+    ld  (_rROMB0), a
+    ld  a, b
+    ldh (_HDMA5_REG + 0), a ; bit 7 clear: general purpose, runs now
+    dec c
+    jr  1$
+8$:
+    ld  a, c                ; c jobs left from hl: move them to the front
+    ld  (_vd_n), a
+    ld  b, a
+    add a, a
+    add a, a
+    add a, a
+    sub a, b
+    ld  b, a
+    ld  de, #_vd
+3$:
+    ld  a, (hl+)
+    ld  (de), a
+    inc de
+    dec b
+    jr  nz, 3$
+    jr  10$
+9$:
+    ld  (_vd_n), a
+10$:
+    xor a, a
+    ldh (_VBK_REG + 0), a
+    pop af
+    ld  (__current_bank), a
+    ld  (_rROMB0), a
+    ret
+    __endasm;
 }
 
 // copies a w x h block to the map at vb_dst (vb_src NULL: zeros). Rows written in VBlank
@@ -1368,7 +1427,8 @@ void frame(void) {
     if (!spr_hold) spr_end();
     vsync();
     // VBlank work: DMA first (it must finish before the screen starts), then map blocks
-    if ((!vd_n || vd_flush()) && vq_n) vq_flush();
+    if (vd_n) vd_flush();
+    if (!vd_n && vq_n) vq_flush();
     if (!fading_out && fadelvl) {
         fadelvl--;
         pal_dirty = 1;
