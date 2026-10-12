@@ -11,7 +11,7 @@
 #include "game.h"
 
 volatile uint8_t win_show;   // window enabled at top of frame
-volatile uint8_t win_split;  // cut window at LY 112 (keeps the HUD visible)
+volatile uint8_t win_split;  // cut window from LY 112 (keeps the HUD visible)
 
 volatile uint8_t joy_latch;
 static uint8_t joy_isr_prev;
@@ -31,8 +31,7 @@ volatile uint8_t band_on;
 uint8_t band_pal[6], band_rest[6];
 static uint8_t band_set;
 
-static void band_write(const uint8_t *p) {
-    while (STAT_REG & 3);   // HBlank: palette RAM is locked while the line is drawn
+static void band_write(const uint8_t *p) {   // in HBlank: palette RAM is locked while drawing
     BCPS_REG = 0x82;        // palette 0, colour 1, auto-increment
     BCPD_REG = p[0];
     BCPD_REG = p[1];
@@ -42,17 +41,24 @@ static void band_write(const uint8_t *p) {
     BCPD_REG = p[5];
 }
 
+// Fires a line early and waits for that line's HBlank: by the time the handler runs, the
+// line it triggered on is already being drawn, and a window switched off mid-line leaves
+// its left part showing.
 static void lcd_isr(void) {
     if (LYC_REG == BAND_LY - 1) {
+        while (STAT_REG & 3);
         band_write(band_pal);
         band_set = 1;
-        LYC_REG = 112;
+        LYC_REG = 111;
         return;
     }
-    if (win_split) LCDC_REG &= ~LCDCF_WINON;
-    if (band_set) {
-        band_write(band_rest);
-        band_set = 0;
+    if (win_split || band_set) {
+        while (STAT_REG & 3);
+        if (win_split) LCDC_REG &= ~LCDCF_WINON;
+        if (band_set) {
+            band_write(band_rest);
+            band_set = 0;
+        }
     }
     if (band_on) LYC_REG = BAND_LY - 1;
 }
@@ -104,7 +110,7 @@ void main(void) {
     CRITICAL {
         add_VBL(vbl_isr);
         STAT_REG = STATF_LYC;
-        LYC_REG = 112;
+        LYC_REG = 111;
         add_LCD(lcd_isr);
         add_LCD(nowait_int_handler);
     }
