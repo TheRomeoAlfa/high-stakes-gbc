@@ -990,7 +990,10 @@ static void board_reset_map(void) {
     uint8_t *buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u);   // attrs, then tiles
     uint8_t *vp, *p, i, r, c, k, plane;
     const uint8_t *src;
-    while (map_vbl_queued()) frame();   // nothing pending may overwrite these rows later
+    while (map_vbl_queued()) {   // nothing pending may overwrite these rows later
+        draw_sprites();
+        frame();
+    }
     for (plane = 0, p = buf; plane < 2; plane++) {
         VBK_REG = 1 - plane;
         for (vp = (uint8_t *)0x9800u; vp < (uint8_t *)0x9800u + RS_ROWS * 32; ) {
@@ -1015,17 +1018,25 @@ static void board_reset_map(void) {
     }
     vram_dma_vbl(buf, (uint8_t *)0x9800u, 1, RS_ROWS * 2, _current_bank);
     vram_dma_vbl(buf + RS_ROWS * 32, (uint8_t *)0x9800u, 0, RS_ROWS * 2, _current_bank);
+    draw_sprites();   // frame() drops sprites not drawn again
+    // the score panel goes in the same VBlank as the old cards: the VBlank interrupt applies
+    // win_show, so it must not change just before (or in) the VBlank before frame()'s one;
+    // the split and sprite cut stay on until then, like the panel
+    while ((uint8_t)(LY_REG - 136) < 18u);
+    win_show = 0;
     frame();
+    win_split = 0;
+    win_cut = 0;
 }
 
 static void round_setup_visuals(void) {
     uint8_t i;
     lift_reset();
     for (i = 0; i < 9; i++) cards[i].fr = lift_cfr[i] = CARD_NONE;
+    hud_all();   // before the swap, so its map rows are part of it
     board_reset_map();
     curx = (int16_t)curpos[cur - 1][0] << 8;
     cury = (int16_t)curpos[cur - 1][1] << 8;
-    hud_all();
 }
 
 // card animations; returns flags: bit0 noani, bit1 canact
@@ -1153,10 +1164,7 @@ static uint8_t score_phase(void) {
                     win_cut = 0;
                     return 0;
                 }
-                win_split = 0;
-                win_cut = 0;
-                win_show = 0;
-                return 1;
+                return 1;   // the panel closes with the board swap (board_reset_map)
             }
         }
         game_frame();
