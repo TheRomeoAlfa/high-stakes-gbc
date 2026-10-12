@@ -983,11 +983,13 @@ static void board_setup(void) {
 static void round_setup_visuals(void) {
     uint8_t i;
     lift_reset();
-    for (i = 0; i < 9; i++) {
-        cards[i].fr = 254;
-        set_card_fr(i, CARD_NONE);
-        gs_drawn[i < 6 ? i : 0] = 255;
-    }
+    // clear the nine cells as one block (it takes most of a VBlank), then the slots in
+    // the next VBlank: queued blocks that don't fit wait for the next one
+    for (i = 0; i < 9; i++) cards[i].fr = lift_cfr[i] = CARD_NONE;
+    map_put_vbl(CELLX(0), CELLY(0), 9, 12, 0, 0);
+    for (i = 0; i < 6; i++) draw_slot(i);
+    frame();
+    frame();
     curx = (int16_t)curpos[cur - 1][0] << 8;
     cury = (int16_t)curpos[cur - 1][1] << 8;
     hud_all();

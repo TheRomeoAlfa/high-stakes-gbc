@@ -288,7 +288,7 @@ void scene_intro(void) BANKED {
 // ------------------------------------------------------------------ blood vial + bar (menu / winnings)
 static void draw_vial(const canvas_t *cv, int16_t ox, int16_t oy, int16_t bl) {
     // port of drawblood(): red rows on top mean "empty", black is blood
-    int16_t px = (int16_t)(((int32_t)1652 * bl) / 5000), pxperc;
+    int16_t px = bl / 3 - bl / 345, pxperc;   // 1652 * bl / 5000 in 16 bits (keeps 32-bit maths out of bank 0)
     uint8_t x, y, c;
     static const int16_t lookup[6] = {0, 8, 30, 80, 162, 212};
     if (px >= 212) pxperc = 10 - (px - 212) / 144;

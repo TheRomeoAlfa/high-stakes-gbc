@@ -27,7 +27,7 @@ build/obj/%.o: src/%.c src/gen/assets.h src/*.h
 
 $(ROM): $(OBJ)
 	$(LCC) $(LCCFLAGS) -o $@ $(OBJ)
-	$(PYTHON) tools/check_align.py build/highstakes.noi
+	$(PYTHON) tools/check_rom.py build/highstakes.map build/highstakes.noi
 
 clean:
 	rm -rf build/obj $(ROM)

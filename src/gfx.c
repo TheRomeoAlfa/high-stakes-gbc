@@ -725,8 +725,8 @@ void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint
 
 // map blocks queued for the next VBlank: tiles and attributes then change together
 // (written mid-frame, a block can show new attributes over old tiles for a frame)
-#define VQ_MAX 8
-typedef struct { uint8_t x, y, w, h; const uint8_t *tiles, *attrs; } vq_t;
+#define VQ_MAX 12
+typedef struct { uint8_t x, y, w, h; const uint8_t *tiles, *attrs; uint8_t *dst; } vq_t;   // dst: map address
 static vq_t vq[VQ_MAX];
 static uint8_t vq_n;
 
@@ -739,14 +739,15 @@ void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tile
     uint8_t i;
     vq_t *j = vq;
     for (i = 0; i < vq_n; i++, j++)
-        if (j->x == x && j->y == y) break;   // replaces a pending draw of the same block
+        if (j->x == x && j->y == y && j->w == w && j->h == h) break;   // replaces a pending draw of the same block
     if (i == VQ_MAX) {                       // full: draw now
-        vq_t t = {x, y, w, h, tiles, attrs};
+        vq_t t = {x, y, w, h, tiles, attrs, 0};
         vq_run(&t);
         return;
     }
     if (i == vq_n) vq_n++;
     j->x = x; j->y = y; j->w = w; j->h = h; j->tiles = tiles; j->attrs = attrs;
+    j->dst = map_addr(0, x, y);
 }
 
 // CGB general-purpose DMA jobs for the next VBlank: 16-byte blocks, 16-byte aligned source
@@ -791,16 +792,18 @@ static uint8_t vb_w, vb_h;
 
 static void vb_blit(void) __naked {
     __asm
-    ld  hl, #_vb_src
-    ld  a, (hl+)
-    ld  e, a
-    ld  d, (hl)
     ld  hl, #_vb_dst
     ld  a, (hl+)
     ld  h, (hl)
     ld  l, a
     ld  a, (_vb_h)
     ld  b, a
+    ld  a, (_vb_src)
+    ld  e, a
+    ld  a, (_vb_src + 1)
+    ld  d, a
+    or  a, e
+    jr  z, 6$
 1$:
     push hl
     ld  a, (_vb_w)
@@ -821,26 +824,51 @@ static void vb_blit(void) __naked {
     dec b
     jr  nz, 1$
     ret
+    ; NULL source: fill with zeros
+6$:
+    push hl
+    ld  a, (_vb_w)
+    ld  c, a
+    xor a, a
+7$:
+    ld  (hl+), a
+    dec c
+    jr  nz, 7$
+    pop hl
+    ld  a, l
+    add a, #32
+    ld  l, a
+    jr  nc, 8$
+    inc h
+8$:
+    dec b
+    jr  nz, 6$
+    ret
     __endasm;
 }
 
+// Blocks that don't fit in this VBlank wait for the next one: written mid-frame, a block
+// would show new attributes over old tiles for a frame.
 static void vq_flush(void) {
     uint8_t i;
     vq_t *j = vq;
-    for (i = 0; i < vq_n; i++, j++) {
-        if (j->tiles && LY_REG >= 144) {   // still in VBlank: fast path
-            vb_dst = map_addr(0, j->x, j->y);
-            vb_w = j->w;
-            vb_h = j->h;
-            vb_src = j->attrs;
-            VBK_REG = 1;
-            vb_blit();
-            vb_src = j->tiles;
-            VBK_REG = 0;
-            vb_blit();
-        } else vq_run(j);
+    for (i = 0; i < vq_n && LY_REG >= 144; i++, j++) {
+        vb_dst = j->dst;
+        vb_w = j->w;
+        vb_h = j->h;
+        vb_src = j->attrs;   // NULL: clear to tile 0, attribute 0
+        VBK_REG = 1;
+        vb_blit();
+        vb_src = j->tiles;
+        VBK_REG = 0;
+        vb_blit();
+        if (!j->tiles) cv_invalidate();
     }
-    vq_n = 0;
+    if (i < vq_n) {   // keep the rest, in order
+        uint8_t k;
+        for (k = 0; i < vq_n; i++, k++) vq[k] = vq[i];
+        vq_n = k;
+    } else vq_n = 0;
 }
 
 // Card hop overlap row (see lift.c): for each of 3 tiles, out = base tile, with the card's
