@@ -980,15 +980,49 @@ static void board_setup(void) {
     screen_on();
 }
 
+// Swaps the board for the new round's in one VBlank, like the original (all cards gone at
+// once, slots updated): BG map rows 0-13 are copied to RAM, the card area cleared and the
+// slots drawn there, and the rows go back by CGB DMA (896 bytes, about 4 lines of VBlank).
+// Block by block the cards would visibly vanish over a few frames.
+#define RS_ROWS 14
+static void board_reset_map(void) {
+    static const uint8_t sidx[11] = {0, 1, 2, 3, 4, 0, 0, 0, 0, 5, 6};
+    uint8_t *buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u);   // attrs, then tiles
+    uint8_t *vp, *p, i, r, c, k, plane;
+    const uint8_t *src;
+    while (map_vbl_queued()) frame();   // nothing pending may overwrite these rows later
+    for (plane = 0, p = buf; plane < 2; plane++) {
+        VBK_REG = 1 - plane;
+        for (vp = (uint8_t *)0x9800u; vp < (uint8_t *)0x9800u + RS_ROWS * 32; ) {
+            CRITICAL {
+                while (STAT_REG & 2);
+                *p++ = *vp++;
+            }
+        }
+    }
+    VBK_REG = 0;
+    for (plane = 0; plane < 2; plane++)
+        for (r = CELLY(0); r < CELLY(6) + 4; r++) memset(buf + plane * RS_ROWS * 32 + r * 32 + CELLX(0), 0, 9);
+    for (i = 0; i < 6; i++) {
+        k = sidx[gs[i]];
+        if (i < 3) lift_top[i] = k;
+        gs_drawn[i] = gs[i];
+        for (plane = 0; plane < 2; plane++) {
+            src = (plane ? slot_map : slot_attr) + k * 6;
+            for (r = 0; r < 2; r++)
+                for (c = 0; c < 3; c++) buf[plane * RS_ROWS * 32 + (slot_ty[i] + r) * 32 + slot_tx[i] + c] = *src++;
+        }
+    }
+    vram_dma_vbl(buf, (uint8_t *)0x9800u, 1, RS_ROWS * 2, _current_bank);
+    vram_dma_vbl(buf + RS_ROWS * 32, (uint8_t *)0x9800u, 0, RS_ROWS * 2, _current_bank);
+    frame();
+}
+
 static void round_setup_visuals(void) {
     uint8_t i;
     lift_reset();
-    // clear the cards a row at a time (a block per row, as many per VBlank as fit; cell by
-    // cell would overflow the queue), then the slots; a few frames' work at most
     for (i = 0; i < 9; i++) cards[i].fr = lift_cfr[i] = CARD_NONE;
-    for (i = 0; i < 3; i++) map_put_vbl(CELLX(0), CELLY(i * 3), 9, 4, 0, 0);
-    for (i = 0; i < 6; i++) draw_slot(i);
-    for (i = 0; i < 4; i++) frame();
+    board_reset_map();
     curx = (int16_t)curpos[cur - 1][0] << 8;
     cury = (int16_t)curpos[cur - 1][1] << 8;
     hud_all();

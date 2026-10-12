@@ -735,6 +735,10 @@ static void vq_run(const vq_t *j) {
     else map_fill(0, j->x, j->y, j->w, j->h, 0, 0);
 }
 
+uint8_t map_vbl_queued(void) {
+    return vq_n;
+}
+
 uint8_t map_vbl_pending(uint8_t x, uint8_t y) {
     uint8_t i;
     for (i = 0; i < vq_n; i++)

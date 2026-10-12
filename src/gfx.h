@@ -51,7 +51,8 @@ void map_tiles(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t 
 void map_fill(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t tile, uint8_t attr);
 void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs);
 void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs);  // BG map, at next VBlank (tiles NULL = clear)
-uint8_t map_vbl_pending(uint8_t x, uint8_t y);   // a block at x,y still waits for a VBlank
+uint8_t map_vbl_pending(uint8_t x, uint8_t y);
+uint8_t map_vbl_queued(void);   // blocks still waiting for a VBlank   // a block at x,y still waits for a VBlank
 void vram_dma_vbl(const void *src, void *dst, uint8_t vbank, uint8_t blocks, uint8_t rombank);   // at next VBlank
 extern uint8_t lb_bank;            // card hop overlap blend, see lift.c
 extern const uint8_t *lb_rec;
