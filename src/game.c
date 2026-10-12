@@ -983,13 +983,12 @@ static void board_setup(void) {
 static void round_setup_visuals(void) {
     uint8_t i;
     lift_reset();
-    // clear the nine cells as one block (it takes most of a VBlank), then the slots in
-    // the next VBlank: queued blocks that don't fit wait for the next one
+    // clear the cards a row at a time (a block per row, as many per VBlank as fit; cell by
+    // cell would overflow the queue), then the slots; a few frames' work at most
     for (i = 0; i < 9; i++) cards[i].fr = lift_cfr[i] = CARD_NONE;
-    map_put_vbl(CELLX(0), CELLY(0), 9, 12, 0, 0);
+    for (i = 0; i < 3; i++) map_put_vbl(CELLX(0), CELLY(i * 3), 9, 4, 0, 0);
     for (i = 0; i < 6; i++) draw_slot(i);
-    frame();
-    frame();
+    for (i = 0; i < 4; i++) frame();
     curx = (int16_t)curpos[cur - 1][0] << 8;
     cury = (int16_t)curpos[cur - 1][1] << 8;
     hud_all();

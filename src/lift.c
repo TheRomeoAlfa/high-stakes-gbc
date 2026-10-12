@@ -330,9 +330,14 @@ static void lift_render(uint8_t s) {
 // top to bottom, so a card hopping into a lifted card above is drawn after it
 void lift_update(void) BANKED {
     uint8_t i, s;
+    lift_t *L;
     for (i = 0; i < 9; i++) {
         s = lslot[i];
-        if (s && lifts[s - 1].drawn != llt[i]) lift_render(s - 1);
+        if (!s) continue;
+        L = &lifts[s - 1];
+        // if last frame's map block is still queued (no room in that VBlank), hold the
+        // frame: new tiles under old palettes would show for a frame
+        if (L->drawn != llt[i] && !map_vbl_pending(L->mx, L->my)) lift_render(s - 1);
     }
 }
 

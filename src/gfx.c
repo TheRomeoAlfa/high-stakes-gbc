@@ -735,6 +735,13 @@ static void vq_run(const vq_t *j) {
     else map_fill(0, j->x, j->y, j->w, j->h, 0, 0);
 }
 
+uint8_t map_vbl_pending(uint8_t x, uint8_t y) {
+    uint8_t i;
+    for (i = 0; i < vq_n; i++)
+        if (vq[i].x == x && vq[i].y == y) return 1;
+    return 0;
+}
+
 void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs) {
     uint8_t i;
     vq_t *j = vq;
@@ -785,7 +792,9 @@ static void vd_flush(void) {
     vd_n = 0;
 }
 
-// copies a w x h block to the map at vb_dst without waiting on STAT: VBlank only
+// copies a w x h block to the map at vb_dst (vb_src NULL: zeros). Rows written in VBlank
+// go at full speed; once VBlank is over, each byte waits for mode 0/1 (writes during
+// mode 3 are lost), like vram_copy.
 static uint8_t *vb_dst;
 static const uint8_t *vb_src;
 static uint8_t vb_w, vb_h;
@@ -796,24 +805,63 @@ static void vb_blit(void) __naked {
     ld  a, (hl+)
     ld  h, (hl)
     ld  l, a
-    ld  a, (_vb_h)
-    ld  b, a
     ld  a, (_vb_src)
     ld  e, a
     ld  a, (_vb_src + 1)
     ld  d, a
-    or  a, e
-    jr  z, 6$
+    ld  a, (_vb_h)
+    ld  b, a
 1$:
     push hl
     ld  a, (_vb_w)
     ld  c, a
-2$:
+    ld  a, d
+    or  a, e
+    jr  z, 6$
+    ldh a, (_LY_REG + 0)
+    cp  a, #144
+    jr  c, 4$
+2$:                      ; copy, in VBlank
     ld  a, (de)
     inc de
     ld  (hl+), a
     dec c
     jr  nz, 2$
+    jr  9$
+4$:                      ; copy, waiting on STAT
+    di
+5$:
+    ldh a, (_STAT_REG + 0)
+    and a, #2
+    jr  nz, 5$
+    ld  a, (de)
+    ld  (hl+), a
+    ei
+    inc de
+    dec c
+    jr  nz, 4$
+    jr  9$
+6$:                      ; zeros
+    ldh a, (_LY_REG + 0)
+    cp  a, #144
+    jr  c, 8$
+    xor a, a
+7$:
+    ld  (hl+), a
+    dec c
+    jr  nz, 7$
+    jr  9$
+8$:
+    di
+10$:
+    ldh a, (_STAT_REG + 0)
+    and a, #2
+    jr  nz, 10$          ; leaves a = 0
+    ld  (hl+), a
+    ei
+    dec c
+    jr  nz, 8$
+9$:
     pop hl
     ld  a, l
     add a, #32
@@ -824,35 +872,19 @@ static void vb_blit(void) __naked {
     dec b
     jr  nz, 1$
     ret
-    ; NULL source: fill with zeros
-6$:
-    push hl
-    ld  a, (_vb_w)
-    ld  c, a
-    xor a, a
-7$:
-    ld  (hl+), a
-    dec c
-    jr  nz, 7$
-    pop hl
-    ld  a, l
-    add a, #32
-    ld  l, a
-    jr  nc, 8$
-    inc h
-8$:
-    dec b
-    jr  nz, 6$
-    ret
     __endasm;
 }
 
-// Blocks that don't fit in this VBlank wait for the next one: written mid-frame, a block
-// would show new attributes over old tiles for a frame.
+// Blocks that don't fit in what is left of this VBlank wait for the next one: drawn
+// mid-frame, a block could show new attributes over old tiles. A block costs about 1
+// line per 10 cells (both planes) plus 2 for overhead; VBlank is lines 144-153. (If the
+// estimate is short, vb_blit still writes safely, just slower.)
 static void vq_flush(void) {
-    uint8_t i;
+    uint8_t i, ly;
     vq_t *j = vq;
-    for (i = 0; i < vq_n && LY_REG >= 144; i++, j++) {
+    for (i = 0; i < vq_n; i++, j++) {
+        ly = LY_REG;
+        if (ly < 144 || ly + (uint8_t)(j->w * j->h) / 10 + 2 > 153) break;
         vb_dst = j->dst;
         vb_w = j->w;
         vb_h = j->h;
