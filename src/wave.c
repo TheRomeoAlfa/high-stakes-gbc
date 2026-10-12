@@ -230,6 +230,7 @@ static uint16_t wc_ph;
 static const uint8_t *wc_rows, *wc_mcol;
 static uint8_t *wc_op;
 static uint8_t wc_dy, wc_dyc, wc_c, wc_i, wc_y0, wc_tl, wc_tr, wc_mn, wc_mx, wc_t0, wc_t1;
+static uint8_t wc_lo, wc_hi;   // composites redone this frame
 static uint8_t *wc_o;                    // wv_comp8 args
 static const uint8_t *wc_t, *wc_m;
 static uint8_t wv_bid[40], wv_battr[40];
@@ -579,6 +580,18 @@ static void wv_cols(void) __naked {
     ld  (hl+), a
     ld  a, (_wc_mcol + 1)
     ld  (hl), a
+    ; widen the range to upload
+    ld  a, (_wc_i)
+    ld  hl, #_wc_lo
+    cp  a, (hl)
+    jr  nc, 72$
+    ld  (hl), a
+72$:
+    ld  hl, #_wc_hi
+    cp  a, (hl)
+    jr  c, 73$
+    ld  (hl), a
+73$:
     ; copy the board tile
     ld  a, (_wc_i)
     ld  l, a
@@ -674,6 +687,7 @@ void wave_frame(int16_t wint) BANKED {
     uint8_t i, dy;
     uint16_t p16;
     int16_t cc;
+    if (vram_dma_busy()) return;   // last frame's upload is still going: skip a step
     if (wint < 0) wint = 0;
     p16 = 480 - (uint16_t)(wint * wint) * 6 / 125;   // perc * 30, 1/16 px
     cc = (((int16_t)p16 - 176) * 8) / 7;              // (perc * 30 - 11) on the 16 px band
@@ -685,8 +699,12 @@ void wave_frame(int16_t wint) BANKED {
     wv_kdy = dy;
     wv_ph += 1092;   // one turn a second
     wc_ph = wv_ph;
+    wc_lo = 255;
+    wc_hi = 0;
     wv_cols();
-    vram_dma_vbl(wv_comp, (uint8_t *)0x8000u + (WV_T0 << 4), 0, 40, _current_bank);
+    if (wc_lo != 255)
+        vram_dma_vbl(wv_comp + ((uint16_t)wc_lo << 4), (uint8_t *)0x8000u + ((WV_T0 + wc_lo) << 4), 0,
+                     wc_hi - wc_lo + 1, _current_bank);
     vram_dma_vbl(wv_ids, (uint8_t *)0x9C00u, 0, 4, _current_bank);
     vram_dma_vbl(wv_attrs, (uint8_t *)0x9C00u, 1, 4, _current_bank);
 }

@@ -53,7 +53,9 @@ void map_put(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint
 void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tiles, const uint8_t *attrs);  // BG map, at next VBlank (tiles NULL = clear)
 uint8_t map_vbl_pending(uint8_t x, uint8_t y);
 uint8_t map_vbl_queued(void);   // blocks still waiting for a VBlank   // a block at x,y still waits for a VBlank
+extern uint8_t spr_hold;   // frame() keeps the last sprites while set
 void vram_dma_vbl(const void *src, void *dst, uint8_t vbank, uint8_t blocks, uint8_t rombank);   // at next VBlank
+uint8_t vram_dma_busy(void);   // jobs still waiting (a VBlank could not fit them all)
 extern uint8_t lb_bank;            // card hop overlap blend, see lift.c
 extern const uint8_t *lb_rec;
 extern const uint8_t *lb_src[3];

@@ -762,15 +762,20 @@ void map_put_vbl(uint8_t x, uint8_t y, uint8_t w, uint8_t h, const uint8_t *tile
 }
 
 // CGB general-purpose DMA jobs for the next VBlank: 16-byte blocks, 16-byte aligned source
-// (ROM in rombank, or RAM) and destination. About 64 cycles per block with the CPU halted.
-#define VD_MAX 8
+// (ROM in rombank, or RAM) and destination, the CPU halted meanwhile. In double speed a
+// block takes up to a fifth of a line (SameBoy), and a transfer still running once the
+// screen is drawn writes stray bytes into both VRAM banks (the PPU's fetches collide with
+// it). So each VBlank sends what fits, splitting a job if need be, and the rest waits;
+// map blocks wait with it (frame), so tiles and map stay in step.
+#define VD_MAX 12
+#define VD_PER_LINE 5
 typedef struct { const uint8_t *src; uint8_t *dst; uint8_t vbank, blocks, rombank; } vd_t;
 static vd_t vd[VD_MAX];
 static uint8_t vd_n;
 
 void vram_dma_vbl(const void *src, void *dst, uint8_t vbank, uint8_t blocks, uint8_t rombank) {
     vd_t *j;
-    if (vd_n == VD_MAX) return;
+    if (vd_n == VD_MAX || !blocks) return;
     j = &vd[vd_n++];
     j->src = src;
     j->dst = dst;
@@ -779,21 +784,37 @@ void vram_dma_vbl(const void *src, void *dst, uint8_t vbank, uint8_t blocks, uin
     j->rombank = rombank;
 }
 
-static void vd_flush(void) {
-    uint8_t i, save = _current_bank;
+uint8_t vram_dma_busy(void) {
+    return vd_n;
+}
+
+static uint8_t vd_flush(void) {   // 1 = all sent
+    uint8_t i, n, save = _current_bank;
     vd_t *j = vd;
     for (i = 0; i < vd_n; i++, j++) {
+        n = LY_REG;
+        if (n < 144 || n > 151) break;
+        n = (153 - n) * VD_PER_LINE;   // blocks that end in time, a line spare
+        if (n > j->blocks) n = j->blocks;
         SWITCH_ROM(j->rombank);
         VBK_REG = j->vbank;
         HDMA1_REG = (uint16_t)j->src >> 8;
         HDMA2_REG = (uint8_t)(uint16_t)j->src;
         HDMA3_REG = (uint16_t)j->dst >> 8;
         HDMA4_REG = (uint8_t)(uint16_t)j->dst;
-        HDMA5_REG = j->blocks - 1;   // bit 7 clear: general purpose, runs now
+        HDMA5_REG = n - 1;   // bit 7 clear: general purpose, runs now
+        if (n < j->blocks) {
+            j->src += (uint16_t)n << 4;
+            j->dst += (uint16_t)n << 4;
+            j->blocks -= n;
+            break;
+        }
     }
     VBK_REG = 0;
     SWITCH_ROM(save);
-    vd_n = 0;
+    for (n = 0; i < vd_n; ) vd[n++] = vd[i++];
+    vd_n = n;
+    return !n;
 }
 
 // copies a w x h block to the map at vb_dst (vb_src NULL: zeros). Rows written in VBlank
@@ -1341,12 +1362,13 @@ uint8_t joy, joyp;
 uint8_t scx, scy;
 extern volatile uint8_t joy_latch;
 
+uint8_t spr_hold;   // 1: keep last frame's sprites (nothing drawn this frame)
+
 void frame(void) {
-    spr_end();
+    if (!spr_hold) spr_end();
     vsync();
     // VBlank work: DMA first (it must finish before the screen starts), then map blocks
-    if (vd_n) vd_flush();
-    if (vq_n) vq_flush();
+    if ((!vd_n || vd_flush()) && vq_n) vq_flush();
     if (!fading_out && fadelvl) {
         fadelvl--;
         pal_dirty = 1;

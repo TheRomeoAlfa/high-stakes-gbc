@@ -1015,12 +1015,11 @@ static void board_setup(void) {
 static void board_reset_map(void) {
     static const uint8_t sidx[11] = {0, 1, 2, 3, 4, 0, 0, 0, 0, 5, 6};
     uint8_t *buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u);   // attrs, then tiles
-    uint8_t *vp, *p, i, r, c, k, plane;
+    uint8_t *vp, *p, i, r, c, k, plane, hid;
     const uint8_t *src;
-    while (map_vbl_queued()) {   // nothing pending may overwrite these rows later
-        draw_sprites();
-        frame();
-    }
+    // the old round's sprites stay up until the swap (the new round has cleared its chips)
+    spr_hold = 1;
+    while (map_vbl_queued() || vram_dma_busy()) frame();   // nothing pending may overwrite these rows
     for (plane = 0, p = buf; plane < 2; plane++) {
         VBK_REG = 1 - plane;
         for (vp = (uint8_t *)0x9800u; vp < (uint8_t *)0x9800u + RS_ROWS * 32; ) {
@@ -1043,8 +1042,19 @@ static void board_reset_map(void) {
                 for (c = 0; c < 3; c++) buf[plane * RS_ROWS * 32 + (slot_ty[i] + r) * 32 + slot_tx[i] + c] = *src++;
         }
     }
-    vram_dma_vbl(buf, (uint8_t *)0x9800u, 1, RS_ROWS * 2, _current_bank);
-    vram_dma_vbl(buf + RS_ROWS * 32, (uint8_t *)0x9800u, 0, RS_ROWS * 2, _current_bank);
+    // 896 bytes take more than a VBlank (gfx.c vram_dma_vbl): the rows under the score panel
+    // go a frame early, unseen, the rest with the panel. At a match start the screen is still
+    // black and all of it goes together, over as many VBlanks as it takes.
+    hid = win_show ? (uint8_t)((WY_REG + 7) >> 3) : RS_ROWS;
+    if (hid < RS_ROWS) {
+        vram_dma_vbl(buf + hid * 32, (uint8_t *)0x9800u + hid * 32, 1, (RS_ROWS - hid) * 2, _current_bank);
+        vram_dma_vbl(buf + RS_ROWS * 32 + hid * 32, (uint8_t *)0x9800u + hid * 32, 0, (RS_ROWS - hid) * 2,
+                     _current_bank);
+        do frame(); while (vram_dma_busy());
+    }
+    spr_hold = 0;
+    vram_dma_vbl(buf, (uint8_t *)0x9800u, 1, hid * 2, _current_bank);
+    vram_dma_vbl(buf + RS_ROWS * 32, (uint8_t *)0x9800u, 0, hid * 2, _current_bank);
     draw_sprites();   // frame() drops sprites not drawn again
     // the score panel goes in the same VBlank as the old cards: the VBlank interrupt applies
     // win_show, so it must not change just before (or in) the VBlank before frame()'s one;
@@ -1151,7 +1161,7 @@ static uint8_t score_phase(void) {
         win_cut = (uint8_t)(wy >> 4);
         dochips();
         if (wint <= 0 && pend_i < pend_n && wave_on) wave_end();   // first line next frame (its tiles)
-        else if (wint <= 0 && pend_i < pend_n) {
+        else if (wint <= 0 && pend_i < pend_n && !vram_dma_busy()) {   // nor any wave upload left
             i = pend_i++;
             cv_line.y = 2 + nl;
             cv_line.tile = 155 + nl * 20;
