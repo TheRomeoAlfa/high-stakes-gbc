@@ -230,6 +230,7 @@ static uint16_t wc_ph;
 static const uint8_t *wc_rows, *wc_mcol;
 static uint8_t *wc_op;
 static uint8_t wc_dy, wc_dyc, wc_c, wc_i, wc_y0, wc_tl, wc_tr, wc_mn, wc_mx, wc_t0, wc_t1;
+static uint8_t wc_cs, wc_ce, wv_half;   // wv_cols' columns; which half this frame
 static uint8_t wc_lo, wc_hi;   // composites redone this frame
 static uint8_t *wc_o;                    // wv_comp8 args
 static const uint8_t *wc_t, *wc_m;
@@ -375,7 +376,17 @@ void wave_begin(void) BANKED {
     wv_cols_done = wv_lut_done = wv_board_done = 0;
     wv_bufs();
     VBK_REG = 0;
-    memset(wv_ids, 0, 128);
+    {   // both rows start as the board under them (the water is below), so the half not built
+        uint8_t i;   // yet shows what it should
+        memset(wv_ids, 0, 128);
+        for (i = 0; i < 20; i++) {
+            wv_ids[i] = wv_bid[i];
+            wv_ids[32 + i] = wv_bid[20 + i];
+            wv_attrs[i] = wv_battr[i];
+            wv_attrs[32 + i] = wv_battr[20 + i];
+        }
+    }
+    wv_half = 0;   // (a step starts with the left half)
     memset(wv_kp, 0, sizeof(wv_kp));
     wv_ph = (uint16_t)frames << 10;
     wave_on = 1;
@@ -426,9 +437,9 @@ static void wv_comp8(void) __naked {
 // Builds the two band rows column by column: the water rows of the column's halves (one
 // height per 4 px; the original's are 1.5 GBC px apart), then for each tile the board's map
 // entry, the solid red tile, or a composite (kept from earlier frames while its inputs hold).
-static void wv_cols(void) __naked {
+static void wv_cols(void) __naked {   // columns wc_cs..wc_ce - 1
     __asm
-    xor a, a
+    ld  a, (_wc_cs)
     ld  (_wc_c), a
 1$:
     ; water rows of the left / right half
@@ -515,8 +526,9 @@ static void wv_cols(void) __naked {
     call 60$
     ld  hl, #_wc_c
     inc (hl)
-    ld  a, (hl)
-    cp  a, #20
+    ld  b, (hl)
+    ld  a, (_wc_ce)
+    cp  a, b
     jp  nz, 1$
     ret
 
@@ -720,25 +732,39 @@ static void wv_cols(void) __naked {
     __endasm;
 }
 
+// A step of the wave is built over two frames, the left half then the right (all of it
+// cost more than a frame had), and both go up together: the wave and the title moving 30
+// times a second, never a half a frame behind the other.
 void wave_frame(int16_t wint) BANKED {
     uint8_t i, dy;
     uint16_t p16;
     int16_t cc;
-    if (vram_dma_busy()) return;   // last frame's upload is still going: skip a step
-    if (wint < 0) wint = 0;
-    p16 = 480 - (uint16_t)(wint * wint) * 6 / 125;   // perc * 30, 1/16 px
-    cc = (((int16_t)p16 - 176) * 8) / 7;              // (perc * 30 - 11) on the 16 px band
-    wc_rows = wv_row + 208 + cc;
-    i = wint > 25 ? (uint8_t)(wint - 25) : 0;
-    dy = wv_dy[i > 50 ? 50 : i];
-    wc_dy = dy;
-    wc_dyc = dy != wv_kdy;
-    wv_kdy = dy;
-    wv_ph += 1092;   // one turn a second
-    wc_ph = wv_ph;
-    wc_lo = 255;
-    wc_hi = 0;
+    if (!wv_half) {   // a new step: its parameters, and the left half
+        if (vram_dma_busy()) return;   // the last step's upload is still going
+        if (wint < 0) wint = 0;
+        p16 = 480 - (uint16_t)(wint * wint) * 6 / 125;   // perc * 30, 1/16 px
+        cc = (((int16_t)p16 - 176) * 8) / 7;              // (perc * 30 - 11) on the 16 px band
+        wc_rows = wv_row + 208 + cc;
+        i = wint > 25 ? (uint8_t)(wint - 25) : 0;
+        dy = wv_dy[i > 50 ? 50 : i];
+        wc_dy = dy;
+        wc_dyc = dy != wv_kdy;
+        wv_kdy = dy;
+        wv_ph += 2184;   // one turn a second, two frames a step
+        wc_lo = 255;
+        wc_hi = 0;
+        wc_cs = 0;
+        wc_ce = 10;
+        wc_ph = wv_ph;
+        wv_cols();
+        wv_half = 1;
+        return;
+    }
+    wc_cs = 10;
+    wc_ce = 20;
+    wc_ph = wv_ph + 10 * 3464u;   // (each column's 2 heights step 1732)
     wv_cols();
+    wv_half = 0;
     if (wc_lo != 255)
         vram_dma_vbl(wv_comp + ((uint16_t)wc_lo << 4), (uint8_t *)0x8000u + ((WV_T0 + wc_lo) << 4), 0,
                      wc_hi - wc_lo + 1, _current_bank);
