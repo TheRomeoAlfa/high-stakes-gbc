@@ -301,8 +301,8 @@ FONT = {
     ' ': "... ... ... ... ...", '@': ".## #.# #.# #.. .##",
     # specials (7 wide): \x01 A button, \x02 left, \x03 right, \x04 down, \x05 B button
     '\x01': ".#####. ###.### ##.#.## ##...## .#.#.#.",
-    '\x02': "...#... ..##... .###### ..##... ...#...",
-    '\x03': "...#... ...##.. ######. ...##.. ...#...",
+    '\x02': ".#####. ###..## ##...## ###..## .#####.",   # PICO-8's ⬅️ and ➡️
+    '\x03': ".#####. ##..### ##...## ##..### .#####.",
     '\x04': "..###.. ..###.. ####### .#####. ...#...",
     '\x05': ".#####. ##..### ##.#.## ##..### ##...##",
 }
@@ -826,18 +826,33 @@ def main():
         blit(prev, img, (i % 10) * 24, (i // 10) * 32)
     wpng('cards.png', prev)
 
-    # ---------------- opponent menu cards as sprites (they drift one by one): the four
-    # vampire faces as 8x8 sprites, each tile with the palette (and pixels) it has on the BG,
-    # black left transparent (the menu is black behind them); OBJ palettes 0-3 = card_pals
-    mtiles, mpal = [], []
+    # ---------------- opponent menu cards as sprites (they drift one by one, over the rings):
+    # the four vampire faces as 8x8 sprites, transparent only outside the card, so black
+    # (opaque) takes a colour of each palette: five OBJ palettes (0-3 and 7; the title's logo
+    # has 4-6 while it moves to the menu) of black and two colours, chosen to fit the tiles
+    mt_src = []
     for v in range(10, 14):
-        img = [[0 if c == T else c for c in r] for r in cell(faces[v])]
-        for tx, ty, t in tiles_of(img):
-            pi = min(range(len(card_pals)), key=lambda i: card_tile_err(t, card_pals[i]))
-            mtiles += enc_tile(map_tile(t, card_pals[pi]))
-            mpal.append(pi)
+        for tx, ty, t in tiles_of(cell(faces[v])):
+            mt_src.append(t)
+    used = sorted({c for t in mt_src for r in t for c in r if c != T and c != 0})
+    cands = [[0, a, b] for i, a in enumerate(used) for b in used[i + 1:]]
+    def mt_err(t, pal):
+        return sum((min(dist(c, p) for p in pal) * (8 if c in (8, 10) else 1)) for r in t for c in r if c != T)   # the border and the V first
+    chosen = []
+    for _ in range(5):
+        best = min(cands, key=lambda pal: sum(min(mt_err(t, q) for q in chosen + [pal]) for t in mt_src))
+        chosen.append(best)
+    obj_no = [0, 1, 2, 3, 7]
+    mtiles, mpal = [], []
+    for t in mt_src:
+        pi = min(range(5), key=lambda i: mt_err(t, chosen[i]))
+        pal = chosen[pi]
+        mtiles += enc_tile([[0 if c == T else 1 + min(range(3), key=lambda i: dist(c, pal[i])) for c in r] for r in t])
+        mpal.append(obj_no[pi])
+    print('menu card palettes', chosen, 'error', sum(min(mt_err(t, q) for q in chosen) for t in mt_src))
     carr('menu_spr_tiles', mtiles, banked=True)
     carr('menu_spr_pal', mpal)
+    pal_arr('menu_obj_pals', [[0] + p for p in chosen])   # OBJ 0-3, then 7
 
     # ---------------- game static BG tiles (bank 0, base 1): chip slots + sepline
     gpool = Pool(1, 120)
@@ -1110,6 +1125,14 @@ def main():
                     k = idx[(ty, hc)]
                     rids.append(k if k < 128 else k - 4)
                     rattrs.append(tz[k - 1] | (0x20 if tx < 10 else 0) | (0x08 if k < 128 else 0))
+        if rname == 'TITLE':   # the menu's text over the rings (scenes.c menu_comp): its cells' ring tiles
+            mt = []
+            for ty, tx in [(8 + r, 4 + c) for r in range(4) for c in range(12)] + \
+                          [(3 + r, x) for r in range(2) for x in (6, 7, 12, 13)]:
+                k, a = rids[ty * 20 + tx], rattrs[ty * 20 + tx]
+                assert 0 < k < 128 and a & 0x08
+                mt += [k, min(a & 7, 2) | (0x80 if a & 0x20 else 0)]
+            carr('ring_mt', mt, banked=True)
         carr('ring_map_' + rname.lower(), rids, banked=True)
         carr('ring_attr_' + rname.lower(), rattrs, banked=True)
         define('RING_' + rname, base)

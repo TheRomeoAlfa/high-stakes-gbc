@@ -1217,6 +1217,216 @@ uint8_t win_cut;
 static uint8_t nspr, nspr_prev;
 static uint8_t *oam_p = (uint8_t *)shadow_OAM;
 
+// the menu's text over the rings (scenes.c menu_comp): for each of n cells in list (4 bytes:
+// the ring tile's number in frame, its zone base 0, 1 or 2 and up, and the text's 8-byte ink
+// mask), a tile at dst: the ring's colours 3 / 10 as 1 / 2, the text's ink colour 3. The
+// frame is read in ROM bank rbank; zone base 3: the cell is skipped. DE = dst, BC = frame;
+// list, n, rbank on the stack.
+static uint8_t *cc_list, *cc_frame, *cc_dst;
+static uint8_t cc_n, cc_bank, cc_old, cc_mode, cc_r;
+void comp_cells(uint8_t *dst, const uint8_t *frame, const uint8_t *list, uint8_t n, uint8_t rbank) __naked {
+    (void)dst; (void)frame; (void)list; (void)n; (void)rbank;
+    __asm
+    ldhl sp, #2
+    ld  a, (hl+)
+    ld  (_cc_list), a
+    ld  a, (hl+)
+    ld  (_cc_list + 1), a
+    ld  a, (hl+)
+    ld  (_cc_n), a
+    ld  a, (hl)
+    ld  (_cc_bank), a
+    ld  a, c
+    ld  (_cc_frame), a
+    ld  a, b
+    ld  (_cc_frame + 1), a
+    ld  a, e
+    ld  (_cc_dst), a
+    ld  a, d
+    ld  (_cc_dst + 1), a
+    ldh a, (__current_bank)
+    ld  (_cc_old), a
+    ld  a, (_cc_bank)
+    ldh (__current_bank), a
+    ld  (_rROMB0), a
+    ld  a, (_cc_n)
+    or  a, a
+    jp  z, 90$
+1$:                         ; a cell: bc = its ring tile, de = mask, hl = dst
+    ld  hl, #_cc_list
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  c, (hl)
+    inc hl
+    ld  a, (hl+)
+    ld  (_cc_mode), a
+    ld  e, (hl)
+    inc hl
+    ld  d, (hl)
+    inc hl
+    ld  a, l
+    ld  (_cc_list), a
+    ld  a, h
+    ld  (_cc_list + 1), a
+    ld  l, c
+    ld  h, #0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld  a, (_cc_frame)
+    add a, l
+    ld  c, a
+    ld  a, (_cc_frame + 1)
+    adc a, h
+    ld  b, a
+    ld  hl, #_cc_dst
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  a, #4
+    ld  (_cc_r), a
+    ld  a, (_cc_mode)
+    or  a, a
+    jr  z, 10$
+    dec a
+    jr  z, 20$
+    dec a
+    jr  z, 30$
+    ld  de, #16             ; 3: no ink, left as it is
+    add hl, de
+    jr  80$
+30$:                        ; zones 2 and up: all 10 (two rows a turn)
+    ld  a, (de)
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl), a
+    ld  a, (bc)
+    inc bc
+    or  a, (hl)
+    ld  (hl), a
+    ld  a, (de)
+    inc de
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (de)
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl), a
+    ld  a, (bc)
+    inc bc
+    or  a, (hl)
+    ld  (hl), a
+    ld  a, (de)
+    inc de
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (_cc_r)
+    dec a
+    ld  (_cc_r), a
+    jr  nz, 30$
+    jr  80$
+10$:                        ; zones 0, 1, 2: 3, 3, 10
+    ld  a, (bc)
+    inc bc
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl-), a
+    xor a, (hl)
+    ld  (hl+), a
+    cpl
+    and a, (hl)
+    ld  (hl-), a
+    ld  a, (de)
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (de)
+    inc de
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl-), a
+    xor a, (hl)
+    ld  (hl+), a
+    cpl
+    and a, (hl)
+    ld  (hl-), a
+    ld  a, (de)
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (de)
+    inc de
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (_cc_r)
+    dec a
+    ld  (_cc_r), a
+    jr  nz, 10$
+    jr  80$
+20$:                        ; zones 1, 2, 3: 3, 10, 10
+    ld  a, (bc)
+    inc bc
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl-), a
+    cpl
+    and a, (hl)
+    ld  (hl), a
+    ld  a, (de)
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (de)
+    inc de
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl+), a
+    ld  a, (bc)
+    inc bc
+    ld  (hl-), a
+    cpl
+    and a, (hl)
+    ld  (hl), a
+    ld  a, (de)
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (de)
+    inc de
+    or  a, (hl)
+    ld  (hl+), a
+    ld  a, (_cc_r)
+    dec a
+    ld  (_cc_r), a
+    jr  nz, 20$
+80$:
+    ld  a, l
+    ld  (_cc_dst), a
+    ld  a, h
+    ld  (_cc_dst + 1), a
+    ld  a, (_cc_n)
+    dec a
+    ld  (_cc_n), a
+    jp  nz, 1$
+90$:
+    ld  a, (_cc_old)
+    ldh (__current_bank), a
+    ld  (_rROMB0), a
+    pop hl
+    add sp, #4
+    jp  (hl)
+    __endasm;
+}
+
 // nonzero if the 16-byte tile at p has any pixel not colour 0 (DE = p, result in A)
 uint8_t tile_ink(const uint8_t *p) __naked {
     (void)p;

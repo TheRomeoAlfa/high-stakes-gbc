@@ -44,8 +44,8 @@ a scanline interrupt on those lines so the board's colours survive inside the ba
 - Text uses PICO-8's 3x5 font, software-rendered into tiles.
 - The rings' centre follows the title logo's bob up and down but not sideways, and every
   ring takes the current offset (the original's keep the offset they were born with). On the
-  menu it stays on the middle card while the cards slide. Text over the rings sits on small
-  black boxes.
+  menu it stays on the middle card while the cards slide. The title's streak and the
+  winnings' text sit on small black boxes over the rings (the menu's are drawn on them).
 - Going from the title to the menu, the rings recolour in six bands by radius (the original
   changes them ring by ring), their centre moves to the card in a few steps, and the menu's
   text appears once the cards have settled rather than rising with them.

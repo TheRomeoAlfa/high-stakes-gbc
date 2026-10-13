@@ -88,6 +88,7 @@ void copy_objpals(uint8_t first, uint8_t n, const uint16_t *src);
 
 // ---- sprites
 extern int8_t cam_x, cam_y;
+void comp_cells(uint8_t *dst, const uint8_t *frame, const uint8_t *list, uint8_t n, uint8_t rbank);   // the menu's text over ring tiles
 uint8_t tile_ink(const uint8_t *p);   // any pixel not colour 0 in the tile
 void spr_grid(int16_t x, int16_t y, uint8_t t, const uint8_t *pr, uint8_t or_, uint8_t w, uint8_t h);
 void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop);

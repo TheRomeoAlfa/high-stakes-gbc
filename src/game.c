@@ -72,10 +72,11 @@ void reset_screen(void) BANKED {
     spr_split = spl_ly = cut_ly = vq_first = 0;
     LCDC_REG |= LCDCF_OBJON;
     LCDC_REG &= ~LCDCF_BG8000;
-    if (ring_vram) {   // the title, menu and winnings rings used VRAM bank 1
+    if (ring_vram & 1)   // the title, menu and winnings rings used VRAM bank 1
         load_bkg_banked(BANK(card_tiles), card_tiles, 0, N_CARD_TILES, 1);
-        ring_vram = 0;
-    }
+    if (ring_vram & 2)   // the menu's text over the rings used bank 0's sprite tiles
+        load_spr_banked(BANK(spr_tiles), spr_tiles, 0, N_SPR_TILES, 0);
+    ring_vram = 0;
     SPRITES_8x16;
     LYC_REG = 111;
     scx = scy = 0;

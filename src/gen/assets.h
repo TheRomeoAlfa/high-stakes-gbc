@@ -21,6 +21,7 @@ extern const uint16_t card_pals[16];
 extern const uint8_t menu_spr_tiles[768];
 BANKREF_EXTERN(menu_spr_tiles)
 extern const uint8_t menu_spr_pal[48];
+extern const uint16_t menu_obj_pals[20];
 extern const uint8_t slot_map[42];
 extern const uint8_t lift_b[3168];
 BANKREF_EXTERN(lift_b)
@@ -227,6 +228,8 @@ extern const uint8_t logo_parts[52];
 #define N_LOGO_PARTS 13
 #define N_LOGO_TILES 26
 extern const uint16_t logo_pals[12];
+extern const uint8_t ring_mt[112];
+BANKREF_EXTERN(ring_mt)
 extern const uint8_t ring_map_title[260];
 BANKREF_EXTERN(ring_map_title)
 extern const uint8_t ring_attr_title[260];

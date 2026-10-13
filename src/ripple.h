@@ -11,4 +11,6 @@ void strip_draw(uint8_t wh) BANKED;   // wh: drpwh in hundredths (0 = flat)
 // half columns' rows so far
 void mound_step(uint8_t nt, uint8_t *shown) BANKED;
 
+void bytes_rev(uint8_t *p, uint8_t n) BANKED;   // mirror tile rows (bit order) in place
+
 #endif

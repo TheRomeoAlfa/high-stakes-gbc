@@ -26,10 +26,15 @@ static const int8_t sintab[32] = {0, 1, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 2, 2, 1, 1
 // 124-127) is hidden, then frame() switches LCDC.4 to show it: a step never shows half drawn. Palette z holds the colours of ring zones z..z+2 (by
 // radius), as the original's circcols. Everything else on these screens uses BG tiles
 // 128-255 (the same in both modes), or tile 0 of bank 1 for blank.
+#define CVB ((uint8_t *)(((uint16_t)cvbuf + 15) & ~15u))   // cvbuf, 16-byte aligned (2545 bytes)
 #define RINGS_TITLE 0
 #define RINGS_WIN 1
 #define RINGS_MENU 2
 static uint8_t ring_base, ring_nt, ring_nx, ring_shown, ring_pend, ring_mb, ring_ab;
+static uint8_t ring_force, ring_comp, ring_half;   // send the frame again (new text); merge the menu's text
+static uint8_t *ring_cdst;
+static void menu_comp(uint8_t f, uint8_t from);
+static uint8_t mc_place_at;
 static const uint8_t *ring_mapp, *ring_attrp;
 static uint16_t ring_t;
 // ring colours by zone (radius), the original's circcols1 / circcols2
@@ -50,8 +55,19 @@ static void ring_pals(const uint8_t *c) {
         set_bgpal(z, 0, c[z], c[z < 5 ? z + 1 : 5], c[z < 4 ? z + 2 : 5]);
 }
 
+// a row of the ring map; fold: the menu's palettes 3-5 into 2 (the same colours there)
+static void ring_row(uint8_t r, uint8_t fold) {
+    uint8_t t[20], at[20], i;
+    banked_copy(t, ring_mb, ring_mapp + r * 20, 20);
+    banked_copy(at, ring_ab, ring_attrp + r * 20, 20);
+    if (fold)
+        for (i = 0; i < 20; i++)
+            if ((at[i] & 7) > 2) at[i] = (at[i] & ~7) | 2;
+    map_put(0, 0, r, 20, 1, t, at);
+}
+
 static void rings_setup(uint8_t sc) {
-    uint8_t r, t[20], at[20], bank;
+    uint8_t r, bank;
     const uint8_t *src;
     if (sc == RINGS_WIN) {
         ring_mapp = ring_map_win; ring_attrp = ring_attr_win;
@@ -65,16 +81,13 @@ static void rings_setup(uint8_t sc) {
     }
     map_fill(0x80, 0, 0, 32, 18, 0, 0x08);   // blank: tile 0 of bank 1, in both copies
     map_fill(0x81, 0, 0, 32, 18, 0, 0x08);
-    for (r = 0; r < 13; r++) {
-        banked_copy(t, ring_mb, ring_mapp + r * 20, 20);
-        banked_copy(at, ring_ab, ring_attrp + r * 20, 20);
-        map_put(0, 0, r, 20, 1, t, at);
-    }
+    for (r = 0; r < 13; r++) ring_row(r, sc == RINGS_MENU);
     ring_pals(sc == RINGS_TITLE ? ring_cols1 : ring_cols2);
     ring_shown = ring_base;
     ring_pend = 255;
     ring_t = 0;
-    ring_vram = 1;
+    ring_force = ring_comp = ring_half = 0;
+    ring_vram |= 1;
     src = ring_src(ring_base, &bank);
     load_bkg_banked(bank, src, 0, ring_nt, 1);   // 0x9000
     load_spr_banked(bank, src, 0, ring_nt, 1);   // 0x8000
@@ -97,20 +110,34 @@ static void rings_update(uint8_t set) {
     }
     if (ring_flip) return;   // shown at the next VBlank
     if (ring_pend != 255) {   // uploading
+        if (ring_half) {      // the menu's text: the second half of its cells, then send them all
+            ring_half = 0;
+            menu_comp(ring_pend, 1);
+            vram_dma_vbl(CVB, ring_cdst, 0, 56, _current_bank);
+            if (mc_place_at == 3) mc_place_at = 2;
+            return;
+        }
         if (vram_dma_busy()) return;
         ring_shown = ring_pend;
         ring_pend = 255;
         ring_flip = 1;
+        if (mc_place_at == 2) mc_place_at = 1;
         return;
     }
     f = ring_base + set * RING_STEPS + s;
-    if (f == ring_shown || vram_dma_busy() > 7) return;   // (queued behind any other jobs; 12 fit)
+    if ((f == ring_shown && !ring_force) || vram_dma_busy() > 7) return;   // (behind any other jobs; 12 fit)
+    ring_force = 0;
     src = ring_src(f, &bank);
     dst = (uint8_t *)((LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u);
     n = ring_nt >> 1;   // two jobs: each fits a VBlank with room to spare
     vram_dma_vbl(src, dst, 1, n, bank);
     vram_dma_vbl(src + ((uint16_t)n << 4), dst + ((uint16_t)n << 4), 1, ring_nt - n, bank);
     if (ring_nx) vram_dma_vbl(RING_EXTRA(f), dst + (RING_XTILE << 4), 0, ring_nx, RING_XBANK);
+    if (ring_comp) {   // the menu's text over this frame (bank 0's tiles 1-56), half a frame each
+        menu_comp(f, 0);
+        ring_half = 1;
+        ring_cdst = dst + 16;
+    }
     ring_pend = f;
 }
 
@@ -267,11 +294,21 @@ static uint8_t nst;
 #define MENU_SPR 208   // OBJ bank 1: the menu's cards, past the ring tiles, the logo and the text
 static void title_to_menu(const canvas_t *cvs, int8_t sy0);
 // the menu's bar, also drawn by the title for title_to_menu: bank 1 past the logo (the
-// title's own tiles fill bank 0); BG priority (0x80): the cards pass behind it
-static const canvas_t CV_VIAL = {cvbuf, 154, 1, 8, 0, 4, 3, 0x87, 1};
-static const canvas_t CV_BAR2 = {cvbuf, 166, 1, 0, 3, 20, 2, 0x87, 1};
+// title's own tiles fill bank 0); BG priority (0x80): the cards pass behind it. Drawn in
+// place in cvbuf (menu_bufs) and sent from there.
+static canvas_t CV_VIAL = {0, 154, 1, 8, 0, 4, 3, 0x87, 1};
+static canvas_t CV_BAR2 = {0, 166, 1, 0, 3, 20, 2, 0x87, 1};
+static void menu_bufs(void) {
+    CV_VIAL.buf = CVB + 1280;
+    CV_BAR2.buf = CVB + 1472;   // (to 2111; the menu's merged cells 0-895, its arrows 2112-2431)
+}
+// a canvas drawn in place (16-byte aligned, placed already): its tiles by DMA at VBlank
+static void cv_send(const canvas_t *c) {
+    vram_dma_vbl(c->buf, (uint8_t *)0x8000u + ((uint16_t)c->tile << 4), c->bank, c->w * c->h, _current_bank);
+}
 static void bar_draw_cv(const canvas_t *vial, const canvas_t *bar2, uint8_t show_streak);
 static void menu_text_draw(void);
+static void menu_text_mask(void);
 
 static void draw_logo(int16_t cx, int16_t cy) {
     uint8_t i;
@@ -309,9 +346,11 @@ void scene_start(void) BANKED {
     load_spr_banked(BANK(menu_spr_tiles), menu_spr_tiles, MENU_SPR, 48, 1);
     map_fill(1, 0, 0, 20, 6, 0, 0x0F);   // the menu's bar, hidden until title_to_menu
     blood_txt = blood;
-    bar_draw_cv(&CV_VIAL, &CV_BAR2, 1);   // (redrawn without the streak for score mode)
+    menu_bufs();
     scoremode = 0;
+    bar_draw_cv(&CV_VIAL, &CV_BAR2, 1);   // (redrawn bare for score mode)
     menu_text_draw();   // the menu's text for "continue", ready for title_to_menu
+    menu_text_mask();
     set_bgpal(6, 8, 0, 7, 9);
     set_bgpal(7, 0, 14, 14, 14);
     set_objpal(3, 7, 7, 7);
@@ -490,16 +529,17 @@ static void draw_vial(const canvas_t *cv, int16_t ox, int16_t oy, int16_t bl) {
         }
 }
 
-// menu: text in BG rows 8-11 (moves with the cards), the bar in the window from line 104
-// BG priority (0x80) on the text and the bar: the cards pass behind them, over the rings
-static const canvas_t CV_MTXT = {cvbuf, 160, 0, 0, 8, 20, 4, 0x86, 0};
+// menu: text in BG rows 8-11 (moves with the cards) over the rings, the bar in the window
+// from line 104
+static canvas_t CV_MTXT = {0, 160, 0, 0, 8, 20, 4, 0, 0};   // (drawn in MTXT_BUF, merged: menu_comp)
 
+// (score mode: the bar alone, as the original's drawblood draws nothing then)
 static void bar_draw_cv(const canvas_t *vial, const canvas_t *bar2, uint8_t show_streak) {
     cv_begin(vial, 0);
-    draw_vial(vial, 7, 3, blood_txt);
+    if (!scoremode) draw_vial(vial, 7, 3, blood_txt);
     cv_draw(vial);
     cv_begin(bar2, 0);
-    cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
+    if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
     if (show_streak) {
         cv_print(chaintxt(), 2, 2, 2);
         s_begin(); s_str("game:"); s_num(tries);
@@ -517,16 +557,16 @@ static void bar_draw(uint8_t show_streak) {
         return;
     }
     cv_begin(&CV_VIAL, 0);
-    draw_vial(&CV_VIAL, 7, 3, blood_txt);
-    cv_dma(&CV_VIAL, 1280);   // cvbuf: canvases drawn in 0-1279
+    if (!scoremode) draw_vial(&CV_VIAL, 7, 3, blood_txt);
+    cv_send(&CV_VIAL);
     cv_begin(&CV_BAR2, 0);
-    cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
+    if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
     if (show_streak) {
         cv_print(chaintxt(), 2, 2, 2);
         s_begin(); s_str("game:"); s_num(tries);
         cv_print(s_end(), 2, 9, 2);
     }
-    cv_dma(&CV_BAR2, 1472);
+    cv_send(&CV_BAR2);
 }
 
 static void bar_setup(void) {
@@ -537,8 +577,125 @@ static void bar_setup(void) {
 // ------------------------------------------------------------------ opponent menu
 static uint8_t mflash;
 
-#define MTXT_BUF ((uint8_t *)(((uint16_t)dlgbuf + 15) & ~15u))
-static uint8_t menu_pend;   // canvases sent, to place once their tiles are in: 1 bar, 2 text
+// ---- the menu's text and arrows over the rings, as the original prints them on the circles:
+// 56 cells (the text's rows 8-11, columns 4-15, and the arrows' 2x2 cells) have tiles of their
+// own, built each ring step from the frame's ring tile and the text's pixels (comp_tile) and
+// sent with the frame into the hidden copy (VRAM bank 0's tiles 1-56, at 0x8000 / 0x9000), so
+// text and rings change together. Ring palettes 3-5 (all colour 10 on the menu) fold into 2
+// (rings_setup, menu_fold), leaving 3-5 to the text: red, pink and flashing white.
+#define MTXT_BUF ((uint8_t *)(((uint16_t)dlgbuf + 15) & ~15u))   // the text, 20x4 tiles
+#define MARR_BUF (CVB + 2112)                                     // the arrows, 10x2 tiles
+#define MC_STAGE CVB                                              // the 56 merged tiles
+#define MC_N 56
+static uint8_t mc_pal[4];      // the text rows' palettes
+// mc_place_at: place the cells: 3 the text is new, 2 a frame of it is sent, 1 it shows
+static uint8_t menu_pend;      // 1: the bar's canvases to place once their tiles are in
+
+// the cells: 0-47 the text's (rows 8-11, columns 4-15), 48-55 the arrows' (rows 3-4, columns
+// 6, 7, 12, 13), each with its own tile (bank 0's 1-56) and an entry in MC_LIST (4 bytes:
+// the ring tile, its zone base or 3 to skip, the text's ink mask: the cell's tile in the
+// text's buffer, made an 8-byte mask in place). Cells without ink show the ring tile; a cell
+// with ink in the text just replaced is still merged (mc_modes(1)) until the new text is
+// placed, so nothing shows half changed.
+#define MC_LIST (CVB + 896)    // 56 x 4 bytes
+#define MC_MT (CVB + 1120)     // ring_mt (gen_assets: each cell's ring tile and zone base, flip)
+static uint8_t mc_ink[7], mc_was[7];   // cells with ink: now, in the text before
+static const uint8_t mc_ac[4] = {1, 2, 7, 8};   // the arrows' cells' columns in their canvas
+
+static uint8_t *mc_tile(uint8_t i) {   // (the text's: i < 48)
+    uint8_t r = 0;
+    if (i < 48) {
+        while (i >= 12) { i -= 12; r++; }
+        return MTXT_BUF + ((uint16_t)(r * 20 + 4 + i) << 4);
+    }
+    i -= 48;
+    return MARR_BUF + ((uint16_t)((i >> 2) * 10 + mc_ac[i & 3]) << 4);
+}
+
+// a tile's ink as an 8-byte row mask, in place; mirrored for the left half's flipped tiles
+static uint8_t mc_mask(uint8_t *p, uint8_t flip) {
+    uint8_t r = 8, v, any = 0, *q = p, *d = p;
+    do {
+        v = *q++;
+        v |= *q++;
+        *d++ = v;
+        any |= v;
+    } while (--r);
+    if (flip && any) bytes_rev(p, 8);
+    return any;
+}
+
+static uint8_t mc_split;   // the cell the second half of the merging starts at (even work)
+
+static void mc_modes(uint8_t was) {
+    uint8_t i, n = 0, k = 0, *e = MC_LIST + 1;
+    for (i = 0; i < 56; i++, e += 4) {
+        uint8_t b = 1 << (i & 7), ink = i >= 48 || (mc_ink[i >> 3] & b) || (was && (mc_was[i >> 3] & b));
+        *e = ink ? MC_MT[(i << 1) + 1] & 3 : 3;
+        n += ink;
+    }
+    for (i = 0, e = MC_LIST + 1; i < 56 && k < (n >> 1); i++, e += 4)
+        k += *e != 3;
+    mc_split = i;
+}
+
+static void mc_list(void) {
+    uint8_t i, *e = MC_LIST, *m;
+    banked_copy(MC_MT, BANK(ring_mt), ring_mt, 112);
+    for (i = 0; i < 56; i++, e += 4) {
+        m = mc_tile(i);
+        e[0] = MC_MT[i << 1];
+        e[2] = (uint8_t)(uint16_t)m;
+        e[3] = (uint8_t)((uint16_t)m >> 8);
+    }
+    mc_modes(0);
+}
+
+static void menu_comp(uint8_t f, uint8_t half) {   // the cells before mc_split, or from it
+    uint8_t bank, from = half ? mc_split : 0, n = half ? 56 - mc_split : mc_split;
+    const uint8_t *fr = ring_src(f, &bank);
+    if (n) comp_cells(MC_STAGE + ((uint16_t)from << 4), fr, MC_LIST + (from << 2), n, bank);
+}
+
+// the cells into the map: the merged tiles where there is ink, the rings elsewhere
+static void mc_place_row(uint8_t r) {   // a text row, 0-3
+    uint8_t t[20], at[20], c, i;
+    {
+        banked_copy(t, ring_mb, ring_mapp + (8 + r) * 20, 20);
+        banked_copy(at, ring_ab, ring_attrp + (8 + r) * 20, 20);
+        for (c = 0; c < 20; c++)
+            if ((at[c] & 7) > 2) at[c] = (at[c] & ~7) | 2;
+        for (c = 0; c < 12; c++) {
+            i = r * 12 + c;
+            if (mc_ink[i >> 3] & (1 << (i & 7))) {
+                t[4 + c] = 1 + i;
+                at[4 + c] = mc_pal[r] | (c < 6 ? 0x20 : 0);
+            }
+        }
+        map_put(0, 0, 8 + r, 20, 1, t, at);
+    }
+}
+
+static uint8_t mc_arrows;   // the arrows' cells are placed
+
+static void mc_place_arrows(void) {   // (always merged, so placed once)
+    static const uint8_t ax[4] = {6, 7, 12, 13};
+    uint8_t t[1], at[1], r, c;
+    mc_arrows = 1;
+    for (r = 0; r < 2; r++)
+        for (c = 0; c < 4; c++) {
+            t[0] = 49 + r * 4 + c;
+            at[0] = 4 | (c < 2 ? 0x20 : 0);   // the arrows' colour 2: pink
+            map_put(0, ax[c], 3 + r, 1, 1, t, at);
+        }
+}
+
+static void mc_place(void) {   // all of it
+    uint8_t r;
+    for (r = 0; r < 4; r++) mc_place_row(r);
+    mc_place_arrows();
+    mc_modes(0);
+}
 
 static void menu_text_draw(void) {   // into MTXT_BUF
     static const char *t[4];
@@ -572,20 +729,52 @@ static void menu_text_draw(void) {   // into MTXT_BUF
         t[2] = s_end();
         t[3] = "\x01 unlock";
     }
+    CV_MTXT.buf = MTXT_BUF;
     cv_begin(&CV_MTXT, 0);
-    for (i = 0; i < 4; i++) cv_cprint(t[i], 80, ty[i], col[i]);
-    memcpy(MTXT_BUF, cvbuf, 80 * 16);
+    for (i = 0; i < 4; i++) {
+        cv_cprint(t[i], 80, ty[i], col[i]);
+        mc_pal[i] = 2 + col[i];   // colour 1, 2, 3: palette 3, 4, 5
+    }
 }
 
-// by DMA (a CPU copy of 80 tiles stops the menu for frames), placed once it is in (menu_place)
-static void menu_text_send(void) {
-    vram_dma_vbl(MTXT_BUF, (uint8_t *)0x8000u + (160 << 4), 0, 80, _current_bank);
-    menu_pend |= 2;
+// the text's ink masks (after menu_text_draw, a frame later on a card change)
+static void menu_text_mask(void) {
+    uint8_t i;
+    for (i = 0; i < 7; i++) {
+        mc_was[i] = mc_ink[i];
+        mc_ink[i] = 0;
+    }
+    {
+        uint8_t r, c, *row = MTXT_BUF + (4 << 4);   // row 0, column 4
+        for (i = 0, r = 0; r < 4; r++, row += 20 << 4) {
+            uint8_t *p = row;
+            for (c = 0; c < 12; c++, i++, p += 16)
+                if (mc_mask(p, c < 6)) mc_ink[i >> 3] |= 1 << (i & 7);
+        }
+    }
 }
 
-static void menu_text(void) {
+// the text's palettes over the rings (colour 1 ring 3, 2 ring 10): red, pink, flashing white
+static void menu_text_pals(void) {
+    set_bgpal(3, 0, 3, 10, 8);
+    set_bgpal(4, 0, 3, 10, 9);
+    set_bgpal(5, 0, 3, 10, 7);
+}
+
+static uint8_t mt_stage;   // a card change: 1 the text drawn, its masks next frame
+
+static void menu_text(void) {   // merged at the next ring step, placed after it shows
     menu_text_draw();
-    menu_text_send();
+    mt_stage = 1;
+}
+
+static void menu_text_next(void) {
+    if (mt_stage != 1) return;
+    mt_stage = 0;
+    menu_text_mask();
+    mc_modes(1);
+    ring_force = 1;
+    mc_place_at = 3;
 }
 
 // ---- the opponent cards (update_menu): each drifts on its own, randx / randy =
@@ -643,42 +832,54 @@ static void menu_cards(int16_t mxp, int16_t d) {
     }
 }
 
-// the arrows beside the selected card: BG (the sprite palettes are the cards'), bobbing
-static const canvas_t CV_MARR = {cvbuf, 140, 0, 5, 3, 10, 2, 0x86, 0};
-
-static uint8_t marr_placed, marr_vis;
-
+// the arrows beside the selected card, bobbing: BG cells over the rings (merged with them
+// at the next ring step: menu_comp), as the sprite palettes are the cards'. PICO-8's
+// glyphs, 7x5, straight into the cells' ink masks: canvas x 12 - b and 62 + b, y 6 (the
+// cells: rows 3-4, columns 6-7 and 12-13)
 static void menu_arrows(int8_t b) {
-    cv_begin(&CV_MARR, 0);
-    if (mnucur > 0) cv_putc('\x02', 52 - b - 40, 6, 2);
-    if (mnucur < 3) cv_putc('\x03', 102 + b - 40, 6, 2);
-    cv_dma(&CV_MARR, 2112);   // every few frames; past the menu's other canvases in cvbuf
+    static const uint8_t gl[2][5] = {{0x7C, 0xE6, 0xC6, 0xE6, 0x7C}, {0x7C, 0xCE, 0xC6, 0xCE, 0x7C}};
+    uint8_t a, r, *m0, *m1;
+    for (a = 0; a < 2; a++) {
+        uint8_t sh = a ? 6 + b : 4 - b, on = a ? mnucur < 3 : mnucur > 0;   // x - the left cell's x
+        m0 = mc_tile(48 + a * 2);       // row 3, left then right cell
+        m1 = mc_tile(48 + a * 2 + 1);
+        memset(m0, 0, 8);
+        memset(m1, 0, 8);
+        memset(m0 + 160, 0, 8);         // row 4 (MARR_BUF rows are 10 tiles apart)
+        memset(m1 + 160, 0, 8);
+        if (!on) continue;
+        for (r = 0; r < 5; r++) {
+            uint16_t w = ((uint16_t)gl[a][r] << 8) >> sh;
+            uint8_t y = 6 + r, o = y & 7, *p0 = y < 8 ? m0 : m0 + 160, *p1 = y < 8 ? m1 : m1 + 160;
+            p0[o] = (uint8_t)(w >> 8);
+            p1[o] = (uint8_t)w;
+        }
+        if (!a) {   // the left arrow's cells show flipped ring tiles
+            bytes_rev(m0, 8); bytes_rev(m1, 8);
+            bytes_rev(m0 + 160, 8); bytes_rev(m1 + 160, 8);
+        }
+    }
 }
 
-// the menu's canvases go on screen once their tiles are in VRAM
+// the merged cells go in the map once a frame of them shows (mc_place_at), the bar's
+// canvases once their tiles are in
+static uint8_t mc_row;
+
 static void menu_place(void) {
-    uint8_t v = (mnucur > 0) | ((mnucur < 3) << 1), i;
-    static uint8_t sel[20];
-    if (vram_dma_busy()) return;
-    if (menu_pend & 1) {
+    if (mc_place_at == 1 && !ring_flip) {   // a row a frame; the old text's cells merged till then
+        mc_place_row(mc_row);
+        if (++mc_row == 4) {
+            mc_row = 0;
+            if (!mc_arrows) mc_place_arrows();
+            mc_modes(0);
+            mc_place_at = 0;
+        }
+    }
+    if (menu_pend && !vram_dma_busy()) {
         cv_place(&CV_VIAL);
         cv_place(&CV_BAR2);
+        menu_pend = 0;
     }
-    if (menu_pend & 2) {
-        canvas_t c = CV_MTXT;
-        c.buf = MTXT_BUF;
-        cv_place_rings(&c, 0);
-    }
-    menu_pend = 0;
-    if (v != marr_vis && marr_placed) {   // each arrow stays in its 2x2 cells as it bobs: those
-        marr_vis = v;                     // show the canvas, the rest rings
-        for (i = 0; i < 20; i++) {
-            uint8_t x = i < 10 ? i : i - 10;
-            sel[i] = ((v & 1) && (x == 1 || x == 2)) || ((v & 2) && (x == 7 || x == 8));
-        }
-        cv_place_rings(&CV_MARR, sel);
-    }
-    marr_placed = 1;   // (the arrows' first tiles are in by the next call)
 }
 
 // mnuy: the menu slides up into place from below (from the title or the intro), or down
@@ -699,13 +900,16 @@ static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
     uint8_t mshown[10] = {0};
     cv_place_rings(cvs, blank);   // no streak line on the menu
     set_bgpal(7, 8, 0, 9, 10);    // the bar's colours (the streak's before)
-    if (scoremode) {   // the title drew the bar with the streak, and the text for "continue"
+    if (scoremode) {   // the title drew the bar and the text for "continue"; score mode's bar is bare
         menu_text_draw();
+        menu_text_mask();
+        cv_begin(&CV_VIAL, 0);
+        cv_send(&CV_VIAL);
         cv_begin(&CV_BAR2, 0);
-        cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
-        cv_dma(&CV_BAR2, 1792);   // past the title's canvases in cvbuf
+        cv_send(&CV_BAR2);
     }
-    copy_objpals(0, 4, card_pals);
+    copy_objpals(0, 4, menu_obj_pals);
+    copy_objpals(7, 1, menu_obj_pals + 16);   // the menu's cards (gen_assets)
     cut_ly = 104;   // the cards stay behind the bars
     mound_step(0, mshown);   // (the title's bar as it is, into the block it then changes)
     vq_first = 1;
@@ -742,7 +946,6 @@ static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
             bgpal[6 * 4 + 2] = pico[f ? 15 : 7];
             pal_dirty = 1;
         }
-        if (nt == 39) menu_text_send();   // the menu's text, while the cards settle (placed by scene_menu)
         frame();
         if (nt == 40 && !my && !spl_ly && set == 9) break;
     }
@@ -756,19 +959,24 @@ void scene_menu(void) BANKED {
     uint8_t redraw = 1;
     int8_t ab = 99;
     int16_t mx, mtarget, my = menu_from << 8, d;
+    uint8_t fold = 255;   // from the title: the ring rows still to fold (menu_fold), then the text
     menu_from = 69;
-    if (menu_warm) {   // from the title: rings, cards and bar are up; the rest goes on top
+    mc_arrows = 0;
+    mc_row = 0;
+    if (menu_warm) {   // from the title: rings, cards, bar and text (drawn) are up
         menu_warm = 0;
         my = 0;
-        bar_placed = 1;    // the title's bar is the menu's; its text is in VRAM (menu_pend 2)
+        bar_placed = 1;    // the title's bar is the menu's
+        menu_pend = 0;
         redraw = 0;
         ring_base = RING_MENU;   // the same frames as the title's last set
-        set_bgpal(6, 0, 8, 9, 7);
+        fold = 0;
     } else {
         reset_screen();
         rings_setup(RINGS_MENU);
-        set_bgpal(6, 0, 8, 9, 7);
-        copy_objpals(0, 4, card_pals);
+        menu_bufs();
+        copy_objpals(0, 4, menu_obj_pals);
+        copy_objpals(7, 1, menu_obj_pals + 16);   // the menu's cards (gen_assets)
         load_spr_banked(BANK(menu_spr_tiles), menu_spr_tiles, MENU_SPR, 48, 1);
         SPRITES_8x8;   // reset_screen() sets 8x16 again
         bar_setup();
@@ -784,13 +992,25 @@ void scene_menu(void) BANKED {
     WY_REG = 104;
     win_show = 1;
     blood_txt = blood;
-    if (redraw) {   // (from the title: both up already)
+    if (redraw) {   // the screen is black: the text merged into both copies, placed now
         bar_draw(!scoremode);
-        menu_text();
+        menu_text_draw();
+        menu_text_mask();
+        menu_arrows(0);
+        ab = 0;
+        menu_text_pals();
+        mc_list();
+        menu_comp(ring_shown, 0);
+        menu_comp(ring_shown, 1);
+        vram_copy((uint8_t *)0x9010u, CVB, 56 * 16);
+        vram_copy((uint8_t *)0x8010u, CVB, 56 * 16);
+        mc_place();
+        mc_place_at = 0;
+        ring_comp = 1;
+        ring_vram |= 2;   // (over the sprite tiles: reloaded by reset_screen)
+        redraw = 0;
     }
     mflash = 0;
-    marr_placed = 0;
-    marr_vis = 255;
     screen_on();
     for (;;) {
         update_gtxt();
@@ -801,6 +1021,19 @@ void scene_menu(void) BANKED {
         if (BTNP(J_LEFT) && mnucur > 0) { mnucur--; sfx(63); redraw = 1; }
         else if (BTNP(J_RIGHT) && mnucur < 3) { mnucur++; sfx(63); redraw = 1; }
         if (redraw) { menu_text(); redraw = 0; ab = 99; }
+        if (fold < 13) {   // menu_fold: a ring row a frame (their palettes 3-5 had these colours)
+            ring_row(fold, 1);
+            if (++fold == 13) {
+                menu_text_pals();
+                mc_list();
+                ring_comp = 1;
+                ring_vram |= 2;
+                ring_force = 1;
+                mc_place_at = 3;
+                fold = 255;
+            }
+        }
+        menu_text_next();
         menu_place();
         mtarget = (int16_t)mnucur * 48 - 4;
         mx += (mtarget * 16 - mx) / 10;
@@ -814,7 +1047,7 @@ void scene_menu(void) BANKED {
             uint8_t f = (frames >> 3) & 1;
             if (f != mflash) {
                 mflash = f;
-                bgpal[6 * 4 + 3] = pico[f ? 15 : 7];
+                bgpal[5 * 4 + 3] = pico[f ? 15 : 7];   // the text's colour 3
                 pal_dirty = 1;
             }
         }
@@ -1005,11 +1238,11 @@ void scene_wining(void) BANKED {
         vlev = vial_level(blood_txt);
         cv_begin(&vial, 0);
         cv_rect(0, 0, 31, 1, 1);
-        draw_vial(&vial, 7, 5, blood_txt);
+        if (!scoremode) draw_vial(&vial, 7, 5, blood_txt);   // (score mode: the bar alone)
         memcpy(strip + 192, cvbuf, 64);
         cv_draw(&vial);
         cv_begin(&bar2, 0);
-        cv_bignumc(numstr(blood_txt), 80, 5, 1, 1);
+        if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 5, 1, 1);
         cv_draw(&bar2);
         placed = 6;
         {   // window row 0: the edge tile, the strip over x 32-127
@@ -1071,13 +1304,13 @@ void scene_wining(void) BANKED {
                     vlev = vial_level(blood_txt);
                     cv_begin(&vial, 0);
                     cv_rect(0, 0, 31, 1, 1);
-                    draw_vial(&vial, 7, 5, blood_txt);
+                    if (!scoremode) draw_vial(&vial, 7, 5, blood_txt);   // (score mode: the bar alone)
                     memcpy(strip + 192, cvbuf, 64);   // its top row shows in the strip
                     rip |= 2;
                     cv_dma(&vial, 1632);
                 }
                 cv_begin(&bar2, 0);
-                cv_bignumc(numstr(blood_txt), 80, 5, 1, 1);
+                if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 5, 1, 1);
                 cv_dma(&bar2, 1824);
             }
             if (winphase == 0) {
