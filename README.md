@@ -42,7 +42,8 @@ a scanline interrupt on those lines so the board's colours survive inside the ba
 ### Differences from the original
 
 - Text uses PICO-8's 3x5 font, software-rendered into tiles.
-- The title rings are animated by palette cycling instead of drawn circles.
+- The rings on the title and winnings screens grow from a fixed centre; the original's
+  centre drifts with the logo (and, on the winnings screen, from higher up).
 - When dealt, cards unfold in place instead of flying in from the top of the screen.
 - The opponent cards in the menu scroll together; they don't drift and dip as in the original.
 - The inactive box chip doesn't lift under the cursor (no sprite palette has its colours).

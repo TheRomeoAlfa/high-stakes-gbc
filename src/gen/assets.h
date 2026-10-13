@@ -218,12 +218,16 @@ extern const uint8_t logo_parts[52];
 #define N_LOGO_PARTS 13
 #define N_LOGO_TILES 26
 extern const uint16_t logo_pals[12];
-extern const uint8_t ring_tiles[1040];
-BANKREF_EXTERN(ring_tiles)
+extern const uint8_t rings_a[5600];
+BANKREF_EXTERN(rings_a)
+extern const uint8_t rings_b[5600];
+BANKREF_EXTERN(rings_b)
+#define RING_BANK_A 13
+#define RING_BANK_B 14
+#define RING_STEPS 10
+#define RING_QTILES 70
 extern const uint8_t ring_map[260];
 extern const uint8_t ring_attr[260];
-extern const uint8_t ring_thick[260];
-#define N_RING_TILES 65
 extern const uint8_t fade_tab[832];
 extern const uint8_t vial_px[171];
 #endif

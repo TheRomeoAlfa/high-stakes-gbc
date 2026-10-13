@@ -983,31 +983,61 @@ def main():
     define('N_LOGO_TILES', len(lpool.tiles))
     pal_arr('logo_pals', [[0] + c for c in combos])
 
-    # ---------------- title circles: 4-phase palette cycling rings
-    # pixel phase class encodes (radius mod spacing); tile palette by zone
-    cx, cy, sp_ = 80, 52, 10.0
-    ring = blank(160, 104, 0)
-    zone = []
-    for y in range(104):
-        for x in range(160):
-            d = ((x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2) ** 0.5
-            ring[y][x] = int(((sp_ - (d % sp_)) / sp_) * 4) % 4
-    rpool = Pool(1, 200)
+    # ---------------- title / winnings circles (docircs): rings 10 px apart grow 1 px a step
+    # from the centre, thicker (1-4 px) as they grow. The ring area is mirrored from its
+    # bottom-right quarter with tile flips, so the centre sits on a tile corner, (80, 48);
+    # each of the 10 steps of that quarter (10x7 tiles) is streamed to VRAM by DMA.
+    # A ring's colour goes by its radius (zones 0-3, the original's circcols); a tile's
+    # palette z holds zones z..z+2 as colours 1-3, z being the nearest zone it reaches.
+    cx, cy, sp_ = 80, 48, 10
+    QW, QH = 10, 7
+    def rzone(r):
+        return 0 if r < 15 else 1 if r < 26 else 2 if r < 41 else 3
+    def rthick(r):   # the original's 1/2/3/4 past radius 40/55/71, scaled by 10/9
+        return 1 if r <= 44 else 2 if r <= 61 else 3 if r <= 79 else 4
+    tzone = []
+    for qy in range(QH):
+        for qx in range(QW):
+            dmin = ((qx * 8) ** 2 + (qy * 8) ** 2) ** 0.5
+            tzone.append(rzone(dmin))
+    frames = []
+    for ph in range(sp_):
+        data = []
+        for qy in range(QH):
+            for qx in range(QW):
+                z0 = tzone[qy * QW + qx]
+                px = []
+                for y in range(8):
+                    row = []
+                    for x in range(8):
+                        d = ((qx * 8 + x + 0.5) ** 2 + (qy * 8 + y + 0.5) ** 2) ** 0.5
+                        c = 0
+                        for k in range(12):
+                            r = k * sp_ + ph
+                            if r - rthick(r) < d <= r + 0.5 and r > 0:
+                                c = 1 + min(2, max(0, rzone(r) - z0))
+                                break
+                        row.append(c)
+                    px.append(row)
+                data += enc_tile(px)
+        frames.append(data)
+    half = sp_ // 2
+    carr('rings_a', [v for f in frames[:half] for v in f], banked=True, tgt=LIFTF[1])
+    carr('rings_b', [v for f in frames[half:] for v in f], banked=True, tgt=LIFTF[2])
+    define('RING_BANK_A', LIFT_BANK0 + 1)
+    define('RING_BANK_B', LIFT_BANK0 + 2)
+    define('RING_STEPS', sp_)
+    define('RING_QTILES', QW * QH)
     rids, rattrs = [], []
-    for tx, ty, t in tiles_of(ring):
-        d = ((tx * 8 + 4 - cx) ** 2 + (ty * 8 + 4 - cy) ** 2) ** 0.5
-        z = 0 if d < 15 else 1 if d < 26 else 2 if d < 41 else 3
-        thick = 0 if d < 40 else 1 if d < 55 else 2 if d < 71 else 3
-        idx, fl = rpool.add(t)
-        rids.append(idx)
-        rattrs.append(fl | z | (thick << 2) * 0)
-        zone.append((z, thick))
-    carr('ring_tiles', rpool.data(), banked=True)
+    for ty in range(13):
+        for tx in range(20):
+            qx = tx - 10 if tx >= 10 else 9 - tx
+            qy = ty - 6 if ty >= 6 else 5 - ty
+            rids.append(1 + qy * QW + qx)
+            rattrs.append(tzone[qy * QW + qx] | (0x20 if tx < 10 else 0) | (0x40 if ty < 6 else 0))
     carr('ring_map', rids)
     carr('ring_attr', rattrs)
-    carr('ring_thick', [t for _, t in zone])
-    define('N_RING_TILES', len(rpool.tiles))
-    print('ring tiles', len(rpool.tiles))
+    print('ring frames', sp_, 'x', QW * QH, 'tiles')
 
     # ---------------- palette fade table: fade_tab[k][c] = c * k^2 / 625, k = 0..25
     carr('fade_tab', [c * k * k // 625 for k in range(26) for c in range(32)])

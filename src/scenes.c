@@ -17,37 +17,41 @@ static const int8_t sintab[32] = {0, 1, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 2, 2, 1, 1
                                   0, -1, -1, -2, -2, -3, -3, -3, -3, -3, -3, -3, -2, -2, -1, -1};
 
 // ------------------------------------------------------------------ rings (title / winnings)
-static uint8_t ring_cols[4];
-static uint8_t ring_phase = 255;
-
-static void rings_setup(uint8_t variant) {
-    load_bkg_banked(BANK(ring_tiles), ring_tiles, 1, N_RING_TILES, 0);
-    {
-        uint8_t r;
-        for (r = 0; r < 13; r++) map_put(0, 0, r, 20, 1, ring_map + r * 20, ring_attr + r * 20);
-    }
-    if (variant == 0) { ring_cols[0] = 3; ring_cols[1] = 10; ring_cols[2] = 2; ring_cols[3] = 9; }
-    else { ring_cols[0] = 3; ring_cols[1] = 10; ring_cols[2] = 10; ring_cols[3] = 10; }
-    ring_phase = 255;
-}
-
+// docircs: rings 10 px apart grow from the centre 0.29 px a frame (the original's 0.26 on
+// its 9 px spacing). Each 1 px step is a pre-drawn quarter of the ring area (gen_assets),
+// streamed by DMA into tiles 1..70; the map mirrors it with tile flips. Palette z holds the
+// colours of ring zones z..z+2 (by radius), as the original's circcols.
+static uint8_t ring_step = 255;
 static uint16_t ring_t;
 
+static void ring_upload(void) {
+    uint8_t h = RING_STEPS / 2, s = ring_step;
+    const uint8_t *src = (s < h ? rings_a : rings_b) + (uint16_t)(s < h ? s : s - h) * (RING_QTILES * 16);
+    vram_dma_vbl(src, (uint8_t *)0x9010u, 0, RING_QTILES, s < h ? RING_BANK_A : RING_BANK_B);
+}
+
+static void rings_setup(uint8_t variant) {
+    static const uint8_t cols[2][4] = {{3, 10, 2, 9}, {3, 10, 10, 10}};   // circcols1 / circcols2
+    uint8_t r, z;
+    const uint8_t *c = cols[variant];
+    for (r = 0; r < 13; r++) map_put(0, 0, r, 20, 1, ring_map + r * 20, ring_attr + r * 20);
+    for (z = 0; z < 4; z++)
+        set_bgpal(z, 0, c[z], c[z < 3 ? z + 1 : 3], c[z < 2 ? z + 2 : 3]);
+    ring_step = 0;
+    ring_upload();
+}
+
 static void rings_update(void) {
-    uint8_t ph, z, k, lit;
-    ring_t += 27;  // 0.26 px/frame on a 10px ring spacing, 4 phases
-    ph = (uint8_t)(ring_t >> 8) & 3;
-    if (ph == ring_phase) return;
-    ring_phase = ph;
-    lit = (4 - ph) & 3;
-    for (z = 0; z < 4; z++) {
-        uint16_t *p = bgpal + z * 4;
-        for (k = 0; k < 4; k++) {
-            uint8_t on = k == lit;
-            p[k] = on ? pico[ring_cols[z]] : 0;
-        }
+    uint8_t s;
+    ring_t += 74;   // 0.29 px a frame, in 1/256
+    s = (uint8_t)(ring_t >> 8);
+    if (s >= RING_STEPS) {
+        ring_t -= (uint16_t)RING_STEPS << 8;
+        s -= RING_STEPS;
     }
-    pal_dirty = 1;
+    if (s == ring_step || vram_dma_busy()) return;
+    ring_step = s;
+    ring_upload();
 }
 
 // ------------------------------------------------------------------ dialog box

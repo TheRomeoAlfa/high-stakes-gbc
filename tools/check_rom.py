@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Post-link checks the linker doesn't make:
 - bank 0 must end below 0x4000 (an overflow links silently into bank 1's address range);
-- card hop data read by CGB DMA must be 16-byte aligned (see lift.c).
+- card hop and ring data read by CGB DMA must be 16-byte aligned (see lift.c, scenes.c).
 Usage: check_rom.py build/highstakes.map build/highstakes.noi"""
 import re
 import sys
@@ -14,7 +14,7 @@ if start + length > 0x4000:
     errs.append('bank 0 overflows: ends at 0x%04X' % (start + length))
 bad = []
 for line in open(sys.argv[2]):
-    m = re.match(r'DEF (_liftp?_(?:b|f\d+|shadow)) 0x([0-9A-Fa-f]+)', line)
+    m = re.match(r'DEF (_liftp?_(?:b|f\d+|shadow)|_rings_[ab]) 0x([0-9A-Fa-f]+)', line)
     if m and int(m.group(2), 16) % 16:
         bad.append(m.group(1))
 if bad:
