@@ -702,6 +702,8 @@ LIFTF = [[], [], [], []]   # src/gen/lift0..3.c: card hop/flip animation, each a
 LIFT_BANK0 = 12
 LIFTP = [[] for _ in range(7)]   # src/gen/liftp0..6.c: pre-blended overlap rows, banks 5-11
 LIFTP_BANK0 = 5
+RINGF = [[] for _ in range(12)]   # src/gen/rings0..11.c: title / menu / winnings ring frames, a full bank each
+RING_BANK0 = 17
 
 
 def carr(name, data, typ='uint8_t', banked=False, per=16, tgt=None):
@@ -1031,61 +1033,89 @@ def main():
     define('N_LOGO_TILES', len(lpool.tiles))
     pal_arr('logo_pals', [[0] + c for c in combos])
 
-    # ---------------- title / winnings circles (docircs): rings 10 px apart grow 1 px a step
-    # from the centre, thicker (1-4 px) as they grow. The ring area is mirrored from its
-    # bottom-right quarter with tile flips, so the centre sits on a tile corner, (80, 48);
-    # each of the 10 steps of that quarter (10x7 tiles) is streamed to VRAM by DMA.
+    # ---------------- title / menu / winnings circles (docircs): rings 10 px apart grow 1 px a
+    # step, each born where the logo (or the chosen card) is and drifting to the screen centre
+    # as it grows: radius r is centred (80, 48 + D * (1 - r / 100)) (the original's myage =
+    # r / 90, at 10/9 scale). D is fixed per frame set: the title's logo bob (-3..3), the
+    # menu's chosen card (-14), the winnings' (-10). D being vertical, the ring area (20x13
+    # tiles) is mirrored left-right from its right half with tile flips; the cells under a
+    # scene's text are left out (the menu's text and arrows show the rings in their blank
+    # cells, scenes.c cv_place_rings, but 130 would not fit 127). A frame is 128 tiles (tile 0 blank) that the scene streams by
+    # DMA into one of two copies in VRAM bank 1, 0x8000 or 0x9000 (LCDC.4 picks the one shown).
     # A ring's colour goes by its radius (zones 0-3, the original's circcols); a tile's
-    # palette z holds zones z..z+2 as colours 1-3, z being the nearest zone it reaches.
-    cx, cy, sp_ = 80, 48, 10
-    QW, QH = 10, 7
+    # palette z holds zones z..z+2 as colours 1-3, z being the nearest zone it ever shows.
+    cy, sp_, RR = 48, 10, 100
     def rzone(r):
         return 0 if r < 15 else 1 if r < 26 else 2 if r < 41 else 3
     def rthick(r):   # the original's 1/2/3/4 past radius 40/55/71, scaled by 10/9
         return 1 if r <= 44 else 2 if r <= 61 else 3 if r <= 79 else 4
-    tzone = []
-    for qy in range(QH):
-        for qx in range(QW):
-            dmin = ((qx * 8) ** 2 + (qy * 8) ** 2) ** 0.5
-            tzone.append(rzone(dmin))
-    frames = []
-    for ph in range(sp_):
-        data = []
-        for qy in range(QH):
-            for qx in range(QW):
-                z0 = tzone[qy * QW + qx]
-                px = []
-                for y in range(8):
-                    row = []
-                    for x in range(8):
-                        d = ((qx * 8 + x + 0.5) ** 2 + (qy * 8 + y + 0.5) ** 2) ** 0.5
-                        c = 0
-                        for k in range(12):
-                            r = k * sp_ + ph
-                            if r - rthick(r) < d <= r + 0.5 and r > 0:
-                                c = 1 + min(2, max(0, rzone(r) - z0))
-                                break
-                        row.append(c)
-                    px.append(row)
-                data += enc_tile(px)
-        frames.append(data)
-    half = sp_ // 2
-    carr('rings_a', [v for f in frames[:half] for v in f], banked=True, tgt=LIFTF[1])
-    carr('rings_b', [v for f in frames[half:] for v in f], banked=True, tgt=LIFTF[2])
-    define('RING_BANK_A', LIFT_BANK0 + 1)
-    define('RING_BANK_B', LIFT_BANK0 + 2)
+    ring_scenes = [
+        ('TITLE', list(range(-3, 4)), lambda ty, tx: ty == 12 and 5 <= tx <= 14),
+        ('MENU', [-14], lambda ty, tx: ty == 11 and 7 <= tx <= 12),   # always under "deal me in" / "unlock"
+        ('WIN', [-10], lambda ty, tx: 4 <= ty <= 6 and 2 <= tx <= 17),
+    ]
+    ring_frames = []
+    for rname, dset, excl in ring_scenes:
+        cells = [(ty, hc) for ty in range(13) for hc in range(10) if not excl(ty, 10 + hc)]
+        assert all(excl(ty, 10 + hc) == excl(ty, 9 - hc) for ty in range(13) for hc in range(10))
+        assert len(cells) <= 127
+        zmin = [9] * len(cells)
+        zmax = [-1] * len(cells)
+        raw = []
+        for D in dset:
+            for ph in range(sp_):
+                rings = [(r, cy + D * max(0.0, 1 - r / RR), rthick(r), rzone(r))
+                         for r in (k * sp_ + ph for k in range(12)) if r > 0]
+                fr = []
+                for ci, (ty, hc) in enumerate(cells):
+                    px = []
+                    for y in range(8):
+                        yy = ty * 8 + y + 0.5
+                        for x in range(8):
+                            xx = hc * 8 + x + 0.5
+                            z = -1
+                            for r, ccy, t, rz in rings:
+                                d = math.hypot(xx, yy - ccy)
+                                if r - t < d <= r + 0.5:
+                                    z = rz
+                                    break
+                            if z >= 0:
+                                zmin[ci] = min(zmin[ci], z)
+                                zmax[ci] = max(zmax[ci], z)
+                            px.append(z)
+                    fr.append(px)
+                raw.append(fr)
+        tz = [z if z < 9 else 0 for z in zmin]
+        over = sum(1 for i in range(len(cells)) if zmax[i] - tz[i] > 2)
+        base = len(ring_frames)
+        for fr in raw:
+            data = [0] * 16
+            for ci, px in enumerate(fr):
+                data += enc_tile([[0 if px[y * 8 + x] < 0 else 1 + min(2, px[y * 8 + x] - tz[ci])
+                                   for x in range(8)] for y in range(8)])
+            ring_frames.append(data + [0] * (2048 - len(data)))
+        idx = {c: i + 1 for i, c in enumerate(cells)}
+        rids, rattrs = [], []
+        for ty in range(13):
+            for tx in range(20):
+                hc = tx - 10 if tx >= 10 else 9 - tx
+                if excl(ty, tx):
+                    rids.append(0)
+                    rattrs.append(0x08)
+                else:
+                    rids.append(idx[(ty, hc)])
+                    rattrs.append(tz[idx[(ty, hc)] - 1] | (0x20 if tx < 10 else 0) | 0x08)
+        carr('ring_map_' + rname.lower(), rids, banked=True)
+        carr('ring_attr_' + rname.lower(), rattrs, banked=True)
+        define('RING_' + rname, base)
+        define('RING_NT_' + rname, len(cells) + 1)
+        print('rings', rname.lower(), len(raw), 'frames of', len(cells), 'tiles,', over, 'tiles over 3 zones')
+    assert len(ring_frames) <= 8 * len(RINGF)
+    for i in range(len(RINGF)):
+        blob = [v for f in ring_frames[i * 8:i * 8 + 8] for v in f]
+        carr('ring_b%d' % i, blob + [0] * (16384 - len(blob)), banked=True, tgt=RINGF[i])
+    define('RING_BANK0', RING_BANK0)
     define('RING_STEPS', sp_)
-    define('RING_QTILES', QW * QH)
-    rids, rattrs = [], []
-    for ty in range(13):
-        for tx in range(20):
-            qx = tx - 10 if tx >= 10 else 9 - tx
-            qy = ty - 6 if ty >= 6 else 5 - ty
-            rids.append(1 + qy * QW + qx)
-            rattrs.append(tzone[qy * QW + qx] | (0x20 if tx < 10 else 0) | (0x40 if ty < 6 else 0))
-    carr('ring_map', rids)
-    carr('ring_attr', rattrs)
-    print('ring frames', sp_, 'x', QW * QH, 'tiles')
 
     # ---------------- PICO-8 fades: each screen colour walks its row of the cart's fadetable
     # (fadepal: index flr(perc * 16 + 1), black past the row's end); fade_ramp[c][lvl] for the
@@ -1170,6 +1200,10 @@ def main():
         with open(os.path.join(ROOT, 'src', 'gen', 'liftp%d.c' % i), 'w') as f:
             f.write('// generated by tools/gen_assets.py: pre-blended card hop overlap rows\n#pragma bank %d\n'
                     '#include "assets.h"\n\n' % (LIFTP_BANK0 + i) + '\n'.join(part))
+    for i, part in enumerate(RINGF):
+        with open(os.path.join(ROOT, 'src', 'gen', 'rings%d.c' % i), 'w') as f:
+            f.write('// generated by tools/gen_assets.py: ring frames\n#pragma bank %d\n'
+                    '#include "assets.h"\n\n' % (RING_BANK0 + i) + '\n'.join(part))
     for i, part in enumerate(LIFTF):
         with open(os.path.join(ROOT, 'src', 'gen', 'lift%d.c' % i), 'w') as f:
             f.write('// generated by tools/gen_assets.py: card hop/flip frames\n#pragma bank %d\n'

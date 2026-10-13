@@ -1334,6 +1334,7 @@ uint8_t spr_hold;   // 1: keep last frame's sprites (nothing drawn this frame)
 // Sliding dialog box: lines box_ly0..box_ly1-1 show BG map rows 20-23 (box_scy), the rest
 // scrolls normally; the LCD interrupt switches SCY in the HBlank before each change (main.c).
 uint8_t box_on, box_ly0, box_ly1, box_scy;
+uint8_t ring_flip, ring_vram;
 uint8_t box_nly0, box_nly1, box_nscy;   // next frame's, taken in VBlank
 
 void frame(void) {
@@ -1349,6 +1350,10 @@ void frame(void) {
     ENABLE_OAM_DMA;
     vsync();
     DISABLE_OAM_DMA;
+    if (ring_flip) {   // the hidden ring tiles are complete: show them (scenes.c rings)
+        LCDC_REG ^= LCDCF_BG8000;
+        ring_flip = 0;
+    }
     // VBlank work: DMA first (it must finish before the screen starts), the palettes, then
     // map blocks
     if (vd_n) vd_flush();

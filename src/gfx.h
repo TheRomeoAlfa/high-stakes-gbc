@@ -18,6 +18,8 @@ typedef struct {
     uint8_t win;    // 1 = window map
 } canvas_t;
 
+extern uint8_t ring_flip;   // frame(): switch LCDC.4 (the two ring tile copies) at VBlank
+extern uint8_t ring_vram;   // the rings wrote over the card tiles: reset_screen reloads them
 extern uint8_t cvbuf[];   // shared scratch (160 tiles)
 extern uint8_t dlgbuf[];  // persistent buffer for dialog / help text (80 tiles)
 

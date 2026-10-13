@@ -68,6 +68,12 @@ void reset_screen(void) BANKED {
     win_cut = 0;
     WY_REG = 144;
     box_on = 0;
+    ring_flip = 0;
+    LCDC_REG &= ~LCDCF_BG8000;
+    if (ring_vram) {   // the title, menu and winnings rings used VRAM bank 1
+        load_bkg_banked(BANK(card_tiles), card_tiles, 0, N_CARD_TILES, 1);
+        ring_vram = 0;
+    }
     SPRITES_8x16;
     LYC_REG = 111;
     scx = scy = 0;

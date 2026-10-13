@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Post-link checks the linker doesn't make:
 - bank 0 must end below 0x4000 (an overflow links silently into bank 1's address range);
-- card hop and ring data read by CGB DMA must be 16-byte aligned (see lift.c, scenes.c);
+- card hop data read by CGB DMA must be 16-byte aligned (lift.c), ring frames start their banks (scenes.c);
 - RAM variables must leave the stack (growing down from 0xE000) at least 768 bytes.
 Usage: check_rom.py build/highstakes.map build/highstakes.noi"""
 import re
@@ -18,8 +18,11 @@ if 0xE000 - heap < 768:
     errs.append('RAM variables end at 0x%04X: only %d bytes left for the stack' % (heap, 0xE000 - heap))
 bad = []
 for line in open(sys.argv[2]):
-    m = re.match(r'DEF (_liftp?_(?:b|f\d+|shadow|z)|_rings_[ab]) 0x([0-9A-Fa-f]+)', line)
+    m = re.match(r'DEF (_liftp?_(?:b|f\d+|shadow|z)) 0x([0-9A-Fa-f]+)', line)
     if m and int(m.group(2), 16) % 16:
+        bad.append(m.group(1))
+    m = re.match(r'DEF (_ring_b\d+) 0x([0-9A-Fa-f]+)', line)   # scenes.c addresses frames from 0x4000
+    if m and int(m.group(2), 16) & 0xFFFF != 0x4000:
         bad.append(m.group(1))
 if bad:
     errs.append('not 16-byte aligned for DMA: ' + ', '.join(bad))

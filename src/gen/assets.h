@@ -227,16 +227,50 @@ extern const uint8_t logo_parts[52];
 #define N_LOGO_PARTS 13
 #define N_LOGO_TILES 26
 extern const uint16_t logo_pals[12];
-extern const uint8_t rings_a[5600];
-BANKREF_EXTERN(rings_a)
-extern const uint8_t rings_b[5600];
-BANKREF_EXTERN(rings_b)
-#define RING_BANK_A 13
-#define RING_BANK_B 14
+extern const uint8_t ring_map_title[260];
+BANKREF_EXTERN(ring_map_title)
+extern const uint8_t ring_attr_title[260];
+BANKREF_EXTERN(ring_attr_title)
+#define RING_TITLE 0
+#define RING_NT_TITLE 126
+extern const uint8_t ring_map_menu[260];
+BANKREF_EXTERN(ring_map_menu)
+extern const uint8_t ring_attr_menu[260];
+BANKREF_EXTERN(ring_attr_menu)
+#define RING_MENU 70
+#define RING_NT_MENU 128
+extern const uint8_t ring_map_win[260];
+BANKREF_EXTERN(ring_map_win)
+extern const uint8_t ring_attr_win[260];
+BANKREF_EXTERN(ring_attr_win)
+#define RING_WIN 80
+#define RING_NT_WIN 107
+extern const uint8_t ring_b0[16384];
+BANKREF_EXTERN(ring_b0)
+extern const uint8_t ring_b1[16384];
+BANKREF_EXTERN(ring_b1)
+extern const uint8_t ring_b2[16384];
+BANKREF_EXTERN(ring_b2)
+extern const uint8_t ring_b3[16384];
+BANKREF_EXTERN(ring_b3)
+extern const uint8_t ring_b4[16384];
+BANKREF_EXTERN(ring_b4)
+extern const uint8_t ring_b5[16384];
+BANKREF_EXTERN(ring_b5)
+extern const uint8_t ring_b6[16384];
+BANKREF_EXTERN(ring_b6)
+extern const uint8_t ring_b7[16384];
+BANKREF_EXTERN(ring_b7)
+extern const uint8_t ring_b8[16384];
+BANKREF_EXTERN(ring_b8)
+extern const uint8_t ring_b9[16384];
+BANKREF_EXTERN(ring_b9)
+extern const uint8_t ring_b10[16384];
+BANKREF_EXTERN(ring_b10)
+extern const uint8_t ring_b11[16384];
+BANKREF_EXTERN(ring_b11)
+#define RING_BANK0 17
 #define RING_STEPS 10
-#define RING_QTILES 70
-extern const uint8_t ring_map[260];
-extern const uint8_t ring_attr[260];
 extern const uint8_t fade_tab[832];
 extern const uint8_t vial_px[171];
 #endif
