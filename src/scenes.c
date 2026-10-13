@@ -191,7 +191,7 @@ static const char *chaintxt(void) {
 void scene_start(void) BANKED {
     static const canvas_t bar = {cvbuf, 100, 0, 0, 13, 20, 5, 4, 0};
     static const canvas_t cvs = {cvbuf, 200, 0, 5, 12, 10, 1, 5, 0};
-    uint8_t stcur = 0, redraw = 1, flash = 0;
+    uint8_t stcur = 0, redraw = 1, flash = 0, abob = 0;
     uint16_t bx = 0, by = 0;
     nst = 0;
     if (blood > 0 && blood < 5000) stmnu[nst++] = "continue";
@@ -204,6 +204,7 @@ void scene_start(void) BANKED {
     copy_objpals(0, 3, logo_pals);
     set_bgpal(4, 8, 0, 7, 9);
     set_bgpal(5, 0, 14, 14, 14);
+    set_objpal(3, 7, 7, 7);
     cv_begin(&cvs, 0);
     cv_cprint(chaintxt(), 40, 2, 1);
     cv_draw(&cvs);
@@ -214,8 +215,6 @@ void scene_start(void) BANKED {
             cv_begin(&bar, 0);
             cv_bignumc("high stakes", 80, 4, 1, 0);
             cv_cprint(stmnu[stcur], 80, 22, 2);
-            if (stcur > 0) cv_putc('\x02', 42, 22, 2);
-            if (stcur < nst - 1) cv_putc('\x03', 112, 22, 2);
 #ifdef DEBUG_FPS
             s_begin(); s_num((int16_t)(dbg_loops & 0x7FFF)); s_str("/"); s_num((int16_t)(sys_time & 0x7FFF));
             cv_print(s_end(), 2, 33, 1);
@@ -234,8 +233,16 @@ void scene_start(void) BANKED {
             if (f != flash) {
                 flash = f;
                 bgpal[4 * 4 + 2] = pico[f ? 15 : 7];
+                set_objpal(3, f ? 15 : 7, f ? 15 : 7, f ? 15 : 7);   // the arrows flash with it
                 pal_dirty = 1;
             }
+        }
+        {   // ◀ ▶ breathe in and out a pixel, twice a second (30.5 - sin(t*2), 90.5 + sin(t*2))
+            static const int8_t bob[30] = {0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0};
+            int8_t o = bob[abob];
+            if (++abob >= 30) abob = 0;
+            if (stcur > 0) spr_put(42 + o, 126, SPR_MARR_L, 3);
+            if (stcur < nst - 1) spr_put(112 - o, 126, SPR_MARR_R, 3);
         }
         // cos(t/3), cos(t/4): periods 180 and 240 frames, 32 steps each (8.8)
         bx += 46;
@@ -271,12 +278,13 @@ void scene_intro(void) BANKED {
         "here, the last shot is\non me. it will take\nthe edge off",
         "or maybe you can win\nit all back? how about\nit? one last game..."};
     static const canvas_t big = {cvbuf, 140, 0, 5, 14, 10, 2, 0, 0};   // just wide enough for 5000ML
-    uint8_t ti = 0, done = 0, arrow = 0;
+    uint8_t ti = 0, done = 0, arrow = 0, picfade = 0, k;
     reset_screen();
     vampval = 10;
     set_bgpal(0, 0, 10, 2, 8);
     card_pals_load();
     copy_bgpals(5, 3, whisky_pals);
+    for (k = 20; k < 32; k++) bgpal[k] = 0;   // the picture fades in when it is put down
     load_bkg_banked(BANK(whisky_tiles), whisky_tiles, IMG_BASE, N_WHISKY_TILES, 1);
     blood = blood_txt = 5000;
     mult = 1;
@@ -289,6 +297,16 @@ void scene_intro(void) BANKED {
     for (;;) {
         update_gtxt();
         dlg_slide();
+        if (picfade && picfade <= 33) {   // 33 frames from black, by the fade table
+            uint8_t lv = (uint8_t)(picfade * 25 / 33);
+            const uint8_t *ft = fade_tab + lv * 32;
+            for (k = 0; k < 12; k++) {
+                uint16_t v = whisky_pals[k];
+                bgpal[20 + k] = ft[v & 31] | ((uint16_t)ft[(v >> 5) & 31] << 5) | ((uint16_t)ft[(v >> 10) & 31] << 10);
+            }
+            pal_dirty = 1;
+            picfade++;
+        }
         if (gtxt_changed & 4) {
             cv_begin(&big, 0);
             cv_bignumc(numstr(blood_txt), 40, 2, 3, 1);
@@ -309,6 +327,7 @@ void scene_intro(void) BANKED {
                 else if (ti == 4) {
                     blood = 20; blood_txt = 0; mult = 1;
                     map_put(0, 8, 7, WHISKY_W, WHISKY_H, whisky_map, whisky_attr);
+                    picfade = 1;
                 }
             } else {
                 sfx(51);
@@ -622,7 +641,7 @@ void scene_wining(void) BANKED {
     dropup = wining < 0;
     reset_screen();
     rings_setup(1);
-    set_bgpal(4, 0, 9, 8, 7);
+    set_bgpal(4, 0, 9, 8, 2);   // 3: the separator's purple
     bar_setup();
     copy_objpals(0, 8, obj_pals);
     WY_REG = 104;
@@ -654,6 +673,15 @@ void scene_wining(void) BANKED {
                 } else {
                     cv_cprint(losses_desc ? "losses" : "winnings", 64, 2, 1);
                     cv_bignumc(numstr(wining_txt), 64, 9, 2, 1);
+                }
+                {   // sepline: purple line, dotted ends ("aa2a2a", plum shown black)
+                    static const uint8_t cap[6] = {0, 0, 3, 0, 3, 0};
+                    uint8_t x;
+                    cv_hline(6, 121, 23, 3);
+                    for (x = 0; x < 6; x++) {
+                        cv_pset(x, 23, cap[x]);
+                        cv_pset(127 - x, 23, cap[x]);
+                    }
                 }
                 cv_draw(&txt);
                 redraw = 0;
@@ -745,8 +773,8 @@ void goverprint_set(const char *g1, const char *g2) BANKED { eg1 = g1; eg2 = g2;
 
 void scene_end(void) BANKED {
     static const canvas_t txt = {cvbuf, 100, 0, 2, 3, 16, 3, 0, 0};
-    uint16_t wint = 1000;
-    uint8_t died = eg2[0] == 'e';
+    uint16_t wint = 1000, th = 0;
+    uint8_t died = eg2[0] == 'e', tdy = 255;
     reset_screen();
     set_bgpal(0, 0, 9, 8, 7);
     if (died) {
@@ -758,17 +786,23 @@ void scene_end(void) BANKED {
         load_bkg_banked(BANK(sunset_tiles), sunset_tiles, 1, N_SUNSET_TILES, 0);
         map_put(0, 4, 7, SUNSET_W, SUNSET_H, sunset_map, sunset_attr);
     }
-    cv_begin(&txt, 0);
-    cv_cprint(eg2, 64, 2, 1);
-    cv_bignumc(eg1, 64, 9, 2, 0);
-    cv_draw(&txt);
     screen_on();
     while (wint--) {
+        // govertxth: the text rises 18 px into its clip (/10 a frame); 24 px canvas here
+        uint8_t dy = (uint8_t)((uint16_t)(18 * 256 - th) * 24 / (18 * 256));
+        if (dy != tdy) {
+            tdy = dy;
+            cv_begin(&txt, 0);
+            cv_cprint(eg2, 64, 2 + dy, 1);
+            cv_bignumc(eg1, 64, 9 + dy, 2, 0);
+            cv_draw(&txt);
+        }
+        th += (18 * 256 - th) / 10;
         frame();
         if (BTNP(J_A | J_START)) break;
     }
     savegame();
-    fadeout(1);
+    fadeout(0);
     wait_frames(120);
     music(0);
     scene = SC_START;

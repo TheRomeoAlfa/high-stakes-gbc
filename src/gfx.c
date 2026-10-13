@@ -1468,10 +1468,12 @@ void frame(void) {
     joy = joypad();
 }
 
-void fadeout(uint8_t spd) {
+void fadeout(uint8_t spd) {   // spd 0: one level every 4 frames (the ending's fadeout(0.01))
+    uint8_t t = 0;
     fading_out = 1;
     while (fadelvl < 25) {
-        fadelvl += spd;
+        if (spd) fadelvl += spd;
+        else if (!(++t & 3)) fadelvl++;
         if (fadelvl > 25) fadelvl = 25;
         pal_dirty = 1;
         frame();

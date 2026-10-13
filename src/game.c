@@ -926,6 +926,11 @@ static uint8_t help_update(void) {
         cv_place(&CV_HELP);
         help_drawn = helpi;
         help_rows = 0;
+    } else if (!helpi && help_drawn && helpwy < 144) {   // slides out empty, as the original
+        cv_begin(&CV_HELP, 0);
+        cv_frame(2, 1, 156, 29, 1);
+        help_drawn = 0;
+        help_rows = 0;
     }
     if (help_rows < 4) {
         cv_flush_rows(&CV_HELP, help_rows++, 1);
