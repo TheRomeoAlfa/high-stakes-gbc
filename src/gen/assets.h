@@ -232,19 +232,22 @@ BANKREF_EXTERN(ring_map_title)
 extern const uint8_t ring_attr_title[260];
 BANKREF_EXTERN(ring_attr_title)
 #define RING_TITLE 0
-#define RING_NT_TITLE 126
+#define RING_NT_TITLE 128
+#define RING_NX_TITLE 3
 extern const uint8_t ring_map_menu[260];
 BANKREF_EXTERN(ring_map_menu)
 extern const uint8_t ring_attr_menu[260];
 BANKREF_EXTERN(ring_attr_menu)
 #define RING_MENU 70
 #define RING_NT_MENU 128
+#define RING_NX_MENU 3
 extern const uint8_t ring_map_win[260];
 BANKREF_EXTERN(ring_map_win)
 extern const uint8_t ring_attr_win[260];
 BANKREF_EXTERN(ring_attr_win)
 #define RING_WIN 80
 #define RING_NT_WIN 107
+#define RING_NX_WIN 0
 extern const uint8_t ring_b0[16384];
 BANKREF_EXTERN(ring_b0)
 extern const uint8_t ring_b1[16384];
@@ -269,6 +272,8 @@ extern const uint8_t ring_b10[16384];
 BANKREF_EXTERN(ring_b10)
 extern const uint8_t ring_b11[16384];
 BANKREF_EXTERN(ring_b11)
+extern const uint8_t ring_b12[16384];
+BANKREF_EXTERN(ring_b12)
 #define RING_BANK0 17
 #define RING_STEPS 10
 extern const uint8_t fade_tab[832];

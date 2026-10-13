@@ -44,8 +44,8 @@ a scanline interrupt on those lines so the board's colours survive inside the ba
 - Text uses PICO-8's 3x5 font, software-rendered into tiles.
 - The rings' centre follows the title logo's bob up and down but not sideways, and every
   ring takes the current offset (the original's keep the offset they were born with). On the
-  menu it stays on the middle card while the cards slide; the menu text sits on black boxes
-  over the rings.
+  menu it stays on the middle card while the cards slide. Text over the rings sits on small
+  black boxes.
 - The menu draws three of the four drifting cards at once (the one farthest out is left
   out), to stay within the Game Boy's 10 sprites a line.
 - The inactive box chip doesn't lift under the cursor (no sprite palette has its colours).

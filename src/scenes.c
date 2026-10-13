@@ -19,23 +19,28 @@ static const int8_t sintab[32] = {0, 1, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 2, 2, 1, 1
 // ------------------------------------------------------------------ rings (title / menu / winnings)
 // docircs: rings 10 px apart grow 0.29 px a frame (the original's 0.26 on its 9 px spacing),
 // each born where the logo or the chosen card is and drifting to the centre as it grows.
-// Each 1 px step is a pre-drawn frame (gen_assets: 128 tiles, mirrored left-right by the map)
-// for the scene's centre offset. The frames go by DMA into whichever of the two copies of the
-// ring tiles (VRAM bank 1, 0x8000 / 0x9000) is hidden, then frame() switches LCDC.4 to show
-// it: a step never shows half drawn. Palette z holds the colours of ring zones z..z+2 (by
+// Each 1 px step is a pre-drawn frame (gen_assets: up to 131 tiles, mirrored left-right by
+// the map) for the scene's centre offset. The frames go by DMA into whichever of the two
+// copies of the ring tiles (0x8000 / 0x9000: 128 in VRAM bank 1, the rest in bank 0's
+// 124-127) is hidden, then frame() switches LCDC.4 to show it: a step never shows half drawn. Palette z holds the colours of ring zones z..z+2 (by
 // radius), as the original's circcols. Everything else on these screens uses BG tiles
 // 128-255 (the same in both modes), or tile 0 of bank 1 for blank.
 #define RINGS_TITLE 0
 #define RINGS_WIN 1
 #define RINGS_MENU 2
-static uint8_t ring_base, ring_nt, ring_shown, ring_pend, ring_mb, ring_ab;
+static uint8_t ring_base, ring_nt, ring_nx, ring_shown, ring_pend, ring_mb, ring_ab;
 static const uint8_t *ring_mapp, *ring_attrp;
 static uint16_t ring_t;
 
-static void ring_src(uint8_t f, const uint8_t **src, uint8_t *bank) {
-    *bank = RING_BANK0 + (f >> 3);
-    *src = (const uint8_t *)(0x4000u + ((uint16_t)(f & 7) << 11));
+// frame f: 7 a bank, 128 tiles at 0x4000 + 2048 i, then the extra 4 at 0x7800 + 64 i
+static const uint8_t *ring_src(uint8_t f, uint8_t *bank) {
+    uint8_t b = 0;
+    while (f >= 7) { f -= 7; b++; }
+    *bank = RING_BANK0 + b;
+    return (const uint8_t *)(0x4000u + ((uint16_t)f << 11));
 }
+#define RING_EXTRA(src) ((src) + 0x3800u - ((uint16_t)((src) - (const uint8_t *)0x4000u) >> 11) * (2048 - 64))
+#define RING_XTILE 124   // bank 0
 
 static void rings_setup(uint8_t sc) {
     static const uint8_t cols[3][4] = {{3, 10, 2, 9}, {3, 3, 10, 10}, {3, 3, 10, 10}};   // circcols1 / 2
@@ -43,6 +48,7 @@ static void rings_setup(uint8_t sc) {
     static const uint8_t *const attrs[3] = {ring_attr_title, ring_attr_win, ring_attr_menu};
     static const uint8_t base[3] = {RING_TITLE, RING_WIN, RING_MENU};
     static const uint8_t nt[3] = {RING_NT_TITLE, RING_NT_WIN, RING_NT_MENU};
+    static const uint8_t nx[3] = {RING_NX_TITLE, RING_NX_WIN, RING_NX_MENU};
     uint8_t r, z, t[20], at[20], bank, mb, ab;
     const uint8_t *c = cols[sc], *src;
     if (sc == RINGS_TITLE) { mb = BANK(ring_map_title); ab = BANK(ring_attr_title); }
@@ -63,13 +69,18 @@ static void rings_setup(uint8_t sc) {
         set_bgpal(z, 0, c[z], c[z < 3 ? z + 1 : 3], c[z < 2 ? z + 2 : 3]);
     ring_base = base[sc];
     ring_nt = nt[sc];
+    ring_nx = nx[sc];
     ring_shown = ring_base;
     ring_pend = 255;
     ring_t = 0;
     ring_vram = 1;
-    ring_src(ring_base, &src, &bank);
+    src = ring_src(ring_base, &bank);
     load_bkg_banked(bank, src, 0, ring_nt, 1);   // 0x9000
     load_spr_banked(bank, src, 0, ring_nt, 1);   // 0x8000
+    if (ring_nx) {
+        load_bkg_banked(bank, RING_EXTRA(src), RING_XTILE, ring_nx, 0);
+        load_spr_banked(bank, RING_EXTRA(src), RING_XTILE, ring_nx, 0);
+    }
 }
 
 // set: the title's frame set (its logo bob + 3), 0 elsewhere
@@ -92,12 +103,13 @@ static void rings_update(uint8_t set) {
         return;
     }
     f = ring_base + set * RING_STEPS + s;
-    if (f == ring_shown || vram_dma_busy() > 8) return;   // (queued behind any other jobs; 12 fit)
-    ring_src(f, &src, &bank);
+    if (f == ring_shown || vram_dma_busy() > 7) return;   // (queued behind any other jobs; 12 fit)
+    src = ring_src(f, &bank);
     dst = (uint8_t *)((LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u);
     n = ring_nt >> 1;   // two jobs: each fits a VBlank with room to spare
     vram_dma_vbl(src, dst, 1, n, bank);
     vram_dma_vbl(src + ((uint16_t)n << 4), dst + ((uint16_t)n << 4), 1, ring_nt - n, bank);
+    if (ring_nx) vram_dma_vbl(RING_EXTRA(src), dst + (RING_XTILE << 4), 0, ring_nx, bank);
     ring_pend = f;
 }
 
@@ -111,9 +123,9 @@ static void cv_dma(const canvas_t *c, uint16_t off) {
     vram_dma_vbl(d, (uint8_t *)0x8000u + ((uint16_t)c->tile << 4), c->bank, n, _current_bank);
 }
 
-// place a canvas (just drawn, BG map, in the ring area) over the rings: its cells with ink,
-// the rings in the others, so the rings show around the text
-static void cv_place_rings(const canvas_t *c) {
+// place a canvas (just drawn, BG map, in the ring area) over the rings: its cells with ink
+// (or those set in sel), the rings in the others, so the rings show around the text
+static void cv_place_rings(const canvas_t *c, const uint8_t *sel) {
     uint8_t r, i, k, t[20], at[20], a = c->pal | (c->bank ? 8 : 0);
     const uint8_t *p = c->buf;
     uint16_t o;
@@ -122,7 +134,8 @@ static void cv_place_rings(const canvas_t *c) {
         banked_copy(t, ring_mb, ring_mapp + o, c->w);
         banked_copy(at, ring_ab, ring_attrp + o, c->w);
         for (i = 0; i < c->w; i++, p += 16) {
-            for (k = 0; k < 16 && !p[k]; k++);
+            if (sel) k = *sel++ ? 0 : 16;
+            else for (k = 0; k < 16 && !p[k]; k++);
             if (k < 16) {
                 t[i] = c->tile + r * c->w + i;
                 at[i] = a;
@@ -290,7 +303,8 @@ void scene_start(void) BANKED {
     set_objpal(3, 7, 7, 7);
     cv_begin(&cvs, 0);
     cv_cprint(chaintxt(), 40, 2, 1);
-    cv_draw(&cvs);
+    cv_flush(&cvs);
+    cv_place_rings(&cvs, 0);   // over the rings, which show where it has no ink
     rings_update(3);
     screen_on();
     for (;;) {
@@ -523,7 +537,7 @@ static void menu_text(void) {
     cv_begin(&CV_MTXT, 0);
     for (i = 0; i < 4; i++) cv_cprint(t[i], 80, ty[i], col[i]);
     cv_flush(&CV_MTXT);
-    cv_place_rings(&CV_MTXT);
+    cv_place_rings(&CV_MTXT, 0);
 }
 
 // ---- the opponent cards (update_menu): each drifts on its own, randx / randy =
@@ -591,7 +605,7 @@ static void menu_cards(int16_t mxp, int16_t d) {
 // the arrows beside the selected card: BG (the sprite palettes are the cards'), bobbing
 static const canvas_t CV_MARR = {cvbuf, 140, 0, 5, 3, 10, 2, 0x86, 0};
 
-static uint8_t marr_placed;
+static uint8_t marr_placed, marr_vis;
 
 static void menu_arrows(int8_t b) {
     cv_begin(&CV_MARR, 0);
@@ -601,7 +615,18 @@ static void menu_arrows(int8_t b) {
         cv_flush(&CV_MARR);
         marr_placed = 1;
     } else cv_dma(&CV_MARR, 2048);   // every few frames; past the menu's other canvases
-    cv_place_rings(&CV_MARR);
+    {   // each arrow stays in its 2x2 cells as it bobs: those show the canvas, the rest rings
+        uint8_t v = (mnucur > 0) | ((mnucur < 3) << 1), i;
+        static uint8_t sel[20];
+        if (v != marr_vis) {
+            marr_vis = v;
+            for (i = 0; i < 20; i++) {
+                uint8_t x = i < 10 ? i : i - 10;
+                sel[i] = ((v & 1) && (x == 1 || x == 2)) || ((v & 2) && (x == 7 || x == 8));
+            }
+            cv_place_rings(&CV_MARR, sel);
+        }
+    }
 }
 
 // mnuy: the menu slides up into place from below (from the title or the intro), or down
@@ -631,6 +656,7 @@ void scene_menu(void) BANKED {
     menu_text();
     mflash = 0;
     marr_placed = 0;
+    marr_vis = 255;
     screen_on();
     for (;;) {
         update_gtxt();

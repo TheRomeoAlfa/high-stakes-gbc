@@ -702,7 +702,7 @@ LIFTF = [[], [], [], []]   # src/gen/lift0..3.c: card hop/flip animation, each a
 LIFT_BANK0 = 12
 LIFTP = [[] for _ in range(7)]   # src/gen/liftp0..6.c: pre-blended overlap rows, banks 5-11
 LIFTP_BANK0 = 5
-RINGF = [[] for _ in range(12)]   # src/gen/rings0..11.c: title / menu / winnings ring frames, a full bank each
+RINGF = [[] for _ in range(13)]   # src/gen/rings0..12.c: title / menu / winnings ring frames, a full bank each
 RING_BANK0 = 17
 
 
@@ -1038,10 +1038,12 @@ def main():
     # as it grows: radius r is centred (80, 48 + D * (1 - r / 100)) (the original's myage =
     # r / 90, at 10/9 scale). D is fixed per frame set: the title's logo bob (-3..3), the
     # menu's chosen card (-14), the winnings' (-10). D being vertical, the ring area (20x13
-    # tiles) is mirrored left-right from its right half with tile flips; the cells under a
-    # scene's text are left out (the menu's text and arrows show the rings in their blank
-    # cells, scenes.c cv_place_rings, but 130 would not fit 127). A frame is 128 tiles (tile 0 blank) that the scene streams by
-    # DMA into one of two copies in VRAM bank 1, 0x8000 or 0x9000 (LCDC.4 picks the one shown).
+    # tiles) is mirrored left-right from its right half with tile flips: 130 tiles. A scene
+    # streams each frame by DMA into the hidden one of two copies, 0x8000 or 0x9000 (LCDC.4
+    # picks the one shown): 127 tiles in VRAM bank 1 (tile 0 blank) and the rest in bank 0's
+    # tiles 124-127. The cells always under a scene's text are left out; text elsewhere
+    # shows the rings in its blank cells (scenes.c cv_place_rings).
+    # Bank layout: 7 frames of 128 bank-1 tiles, then their bank-0 tiles (4 each).
     # A ring's colour goes by its radius (zones 0-3, the original's circcols); a tile's
     # palette z holds zones z..z+2 as colours 1-3, z being the nearest zone it ever shows.
     cy, sp_, RR = 48, 10, 100
@@ -1050,15 +1052,15 @@ def main():
     def rthick(r):   # the original's 1/2/3/4 past radius 40/55/71, scaled by 10/9
         return 1 if r <= 44 else 2 if r <= 61 else 3 if r <= 79 else 4
     ring_scenes = [
-        ('TITLE', list(range(-3, 4)), lambda ty, tx: ty == 12 and 5 <= tx <= 14),
-        ('MENU', [-14], lambda ty, tx: ty == 11 and 7 <= tx <= 12),   # always under "deal me in" / "unlock"
+        ('TITLE', list(range(-3, 4)), lambda ty, tx: False),
+        ('MENU', [-14], lambda ty, tx: False),
         ('WIN', [-10], lambda ty, tx: 4 <= ty <= 6 and 2 <= tx <= 17),
     ]
     ring_frames = []
     for rname, dset, excl in ring_scenes:
         cells = [(ty, hc) for ty in range(13) for hc in range(10) if not excl(ty, 10 + hc)]
         assert all(excl(ty, 10 + hc) == excl(ty, 9 - hc) for ty in range(13) for hc in range(10))
-        assert len(cells) <= 127
+        assert len(cells) <= 131
         zmin = [9] * len(cells)
         zmax = [-1] * len(cells)
         raw = []
@@ -1093,8 +1095,10 @@ def main():
             for ci, px in enumerate(fr):
                 data += enc_tile([[0 if px[y * 8 + x] < 0 else 1 + min(2, px[y * 8 + x] - tz[ci])
                                    for x in range(8)] for y in range(8)])
-            ring_frames.append(data + [0] * (2048 - len(data)))
-        idx = {c: i + 1 for i, c in enumerate(cells)}
+            extra = data[2048:]
+            data = data[:2048]
+            ring_frames.append((data + [0] * (2048 - len(data)), extra + [0] * (64 - len(extra))))
+        idx = {c: i + 1 for i, c in enumerate(cells)}   # 128-131: bank 0's 124-127
         rids, rattrs = [], []
         for ty in range(13):
             for tx in range(20):
@@ -1103,16 +1107,20 @@ def main():
                     rids.append(0)
                     rattrs.append(0x08)
                 else:
-                    rids.append(idx[(ty, hc)])
-                    rattrs.append(tz[idx[(ty, hc)] - 1] | (0x20 if tx < 10 else 0) | 0x08)
+                    k = idx[(ty, hc)]
+                    rids.append(k if k < 128 else k - 4)
+                    rattrs.append(tz[k - 1] | (0x20 if tx < 10 else 0) | (0x08 if k < 128 else 0))
         carr('ring_map_' + rname.lower(), rids, banked=True)
         carr('ring_attr_' + rname.lower(), rattrs, banked=True)
         define('RING_' + rname, base)
-        define('RING_NT_' + rname, len(cells) + 1)
+        define('RING_NT_' + rname, min(128, len(cells) + 1))
+        define('RING_NX_' + rname, max(0, len(cells) + 1 - 128))
         print('rings', rname.lower(), len(raw), 'frames of', len(cells), 'tiles,', over, 'tiles over 3 zones')
-    assert len(ring_frames) <= 8 * len(RINGF)
+    assert len(ring_frames) <= 7 * len(RINGF)
     for i in range(len(RINGF)):
-        blob = [v for f in ring_frames[i * 8:i * 8 + 8] for v in f]
+        fs = ring_frames[i * 7:i * 7 + 7]
+        blob = [v for f in fs for v in f[0]]
+        blob += [0] * (7 * 2048 - len(blob)) + [v for f in fs for v in f[1]]
         carr('ring_b%d' % i, blob + [0] * (16384 - len(blob)), banked=True, tgt=RINGF[i])
     define('RING_BANK0', RING_BANK0)
     define('RING_STEPS', sp_)
