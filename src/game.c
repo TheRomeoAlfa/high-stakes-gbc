@@ -460,7 +460,7 @@ static void dropchip1(uint8_t ci, uint8_t delay, int16_t z) {
     chip_t *c = newchip();
     uint8_t h = cards[ci].hint;
     if (h < 2) h = 2;
-    c->x = c->dx = CCX(ci) - 8;
+    c->x = c->dx = CCX(ci) - 7;   // the 13 px token centred on the 19 px card
     c->y = c->dy = CCY(ci) - 3;
     c->z = z;
     c->zd = z ? 0 : 512;
