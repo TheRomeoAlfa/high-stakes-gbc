@@ -333,6 +333,14 @@ void wave_prep_board(uint8_t i0, uint8_t n) BANKED {
     // the board under the band: map entries, and its pixels in band colours
     for (i = i0; i < i0 + n; i++) {
         uint16_t mo = 0x9800u + ((uint16_t)(BAND_LY / 8 + (i >= 20)) << 5) + (i >= 20 ? i - 20 : i);
+        {   // the pass button (columns 1-3) goes as the score window comes: not in the copy
+            uint8_t col = i >= 20 ? i - 20 : i;
+            if (col >= 1 && col <= 3) {
+                wv_bid[i] = wv_battr[i] = 0;
+                memset(wv_board + (i << 4), 0, 16);
+                continue;
+            }
+        }
         VBK_REG = 0;
         wv_bid[i] = k = wv_vread((uint8_t *)mo);
         VBK_REG = 1;
@@ -387,6 +395,9 @@ void wave_begin(void) BANKED {
         }
     }
     wv_half = 0;   // (a step starts with the left half)
+    // the window comes on with these (the first step takes two frames): the board, as it is
+    vram_dma_vbl(wv_ids, (uint8_t *)0x9C00u, 0, 4, _current_bank);
+    vram_dma_vbl(wv_attrs, (uint8_t *)0x9C00u, 1, 4, _current_bank);
     memset(wv_kp, 0, sizeof(wv_kp));
     wv_ph = (uint16_t)frames << 10;
     wave_on = 1;
