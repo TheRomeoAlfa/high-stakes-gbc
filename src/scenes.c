@@ -256,12 +256,15 @@ uint8_t dlg_tick(void) BANKED {
     return dlg_pos >= dlg_len;
 }
 
-void dlg_arrow(uint8_t on) BANKED {
+// the "next" arrow (PICO-8's down glyph): down a pixel two thirds of the time,
+// abs(sin(t / 2)) >= 0.5 as the original's flr(y + 22.5 + abs(sin(time() / 2)))
+void dlg_arrow(uint8_t down) BANKED {
     int16_t x = cv_dlg.w * 8 - 12, y = 21;
     cv_select(&cv_dlg);
-    cv_rect(x, y, x + 6, y + 4, 0);
-    if (on) cv_putc('\x04', x, y, 1);
+    cv_rect(x, y, x + 6, y + 5, 0);
+    cv_putc('\x04', x, y + down, 1);
     dlg_flush_at(x, y);
+    dlg_flush_at(x, y + 5);
 }
 
 // ------------------------------------------------------------------ credits
@@ -386,7 +389,7 @@ void scene_start(void) BANKED {
         if ((frames & 63) == 0) redraw = 1;
 #endif
         {
-            uint8_t f = ((frames >> 3) & 1);
+            uint8_t f = (uint8_t)(frames % 20) < 10;   // sin(time() * 3) < 0: 20 frames
             if (f != flash) {
                 flash = f;
                 bgpal[6 * 4 + 2] = pico[f ? 15 : 7];
@@ -473,16 +476,16 @@ void scene_intro(void) BANKED {
             gtxt_changed = 0;
         }
         done = dlg_tick();
-        if (done) {
-            uint8_t a = (frames >> 4) & 1;
+        {   // (always, as the original's txtbuttx: typing or not)
+            uint8_t p = (uint8_t)(frames % 60), a = p >= 10 && p < 50;
             if (a != arrow) { arrow = a; dlg_arrow(a); }
         }
         if (BTNP(J_A | J_START)) {
             if (ti < 5) {
                 ti++;
                 dlg_say(talk[ti]);
-                arrow = 0;
-                if (ti == 2) { blood = 0; mult = 187; ticksfx = 54; }
+                arrow = 255;
+                if (ti == 1) { blood = 0; mult = 187; ticksfx = 54; }   // with "heheheh..."
                 else if (ti == 4) {
                     blood = 20; blood_txt = 0; mult = 1;
                     map_put(0, 8, 7, WHISKY_W, WHISKY_H, whisky_map, whisky_attr);
@@ -700,10 +703,11 @@ static void mc_place(void) {   // all of it
 static void menu_text_draw(void) {   // into MTXT_BUF
     static const char *t[4];
     static uint8_t col[4];
-    static const uint8_t ty[4] = {2, 10, 19, 25};
+    static uint8_t ty[4] = {2, 10, 19, 25};   // (line 3 at 16 for an unlocked card: the original's 38)
     static char buf2[24];
     uint8_t i;
     col[0] = 1; col[1] = 2; col[2] = 3; col[3] = 3;
+    ty[2] = scoremode || unlocked[mnucur] ? 16 : 19;
     if (scoremode) {
         t[0] = vname[mnucur];
         s_begin(); s_str("high score:"); s_num(high[mnucur]);
@@ -840,7 +844,7 @@ static void menu_arrows(int8_t b) {
     static const uint8_t gl[2][5] = {{0x7C, 0xE6, 0xC6, 0xE6, 0x7C}, {0x7C, 0xCE, 0xC6, 0xCE, 0x7C}};
     uint8_t a, r, *m0, *m1;
     for (a = 0; a < 2; a++) {
-        uint8_t sh = a ? 6 + b : 4 - b, on = a ? mnucur < 3 : mnucur > 0;   // x - the left cell's x
+        uint8_t sh = a ? 6 + b : 4 - b, on = 1;   // x - the left cell's x (both always, as the original)
         m0 = mc_tile(48 + a * 2);       // row 3, left then right cell
         m1 = mc_tile(48 + a * 2 + 1);
         memset(m0, 0, 8);
@@ -940,7 +944,7 @@ static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
             spl_ly = (uint8_t)(cy + 24);
         } else spl_ly = 0;
         menu_cards(mxp, my >> 8);
-        f = (frames >> 3) & 1;   // the title's options keep flashing under the bar
+        f = (uint8_t)(frames % 20) < 10;   // the title's options keep flashing under the bar
         if (f != flash) {
             flash = f;
             bgpal[6 * 4 + 2] = pico[f ? 15 : 7];
@@ -1044,7 +1048,7 @@ void scene_menu(void) BANKED {
         rings_update(0);
         menu_cards(mx >> 4, d);
         {
-            uint8_t f = (frames >> 3) & 1;
+            uint8_t f = (uint8_t)(frames % 20) < 10;   // sin(time() * 3) < 0: 20 frames
             if (f != mflash) {
                 mflash = f;
                 bgpal[5 * 4 + 3] = pico[f ? 15 : 7];   // the text's colour 3
@@ -1211,7 +1215,7 @@ static void drip_draw(uint8_t up) {
 void scene_wining(void) BANKED {
     static const canvas_t txt = {cvbuf, 202, 0, 2, 4, 16, 3, 6, 0};
     int16_t wint = 200, vlev = -1;
-    uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, over = 0, turn = 0, dyw = 255, dyg = 255, n, placed = 0;
+    uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, turn = 0, dyw = 255, dyg = 255, n, placed = 0;
     // wintxth / govertxth: each text rises 18 px into its clip (/10 a frame) and sinks out
     // again; 24 px canvas here. 8.8, 18 * 256 = fully up.
     uint16_t wth = 0, gth = 0, wtd = 18 * 256, gtd = 0;
@@ -1281,10 +1285,6 @@ void scene_wining(void) BANKED {
                     cv_cprint(losses_desc ? "losses" : "winnings", 64, 2 + dyw, 1);
                     cv_bignumc(numstr(wining_txt), 64, 9 + dyw, 2, 1);
                 }
-                if (over && dyg < 24) {
-                    cv_cprint(g2, 64, 2 + dyg, 1);
-                    cv_bignumc(g1, 64, 9 + dyg, 2, 0);
-                }
                 {   // sepline: purple line, dotted ends ("aa2a2a", plum shown black)
                     static const uint8_t cap[6] = {0, 0, 3, 0, 3, 0};
                     uint8_t x;
@@ -1321,7 +1321,7 @@ void scene_wining(void) BANKED {
                         if (blood > 5000) blood = 5000;
                     }
                     savegame();
-                    if (scoremode) { winphase = 4; wint = 200; }
+                    if (scoremode) winphase = 4;   // (wint spent: the text sinks at once)
                     else if (wining == 0) winphase = 3;
                     else { wining = 0; winphase = 1; drip_start(); }
                 }
@@ -1360,8 +1360,8 @@ void scene_wining(void) BANKED {
                     return;
                 }
             } else if (winphase == 5) {
-                if (!over) { over = 1; redraw = 1; wint = 120; wtd = 0; gtd = 18 * 256; }
-                if (wint <= 0) {
+                wtd = 0;   // the winnings text sinks, then the ending (its own text rises there)
+                if (wth < 230) {
                     savegame();
                     fadeout(1);
                     scene = SC_END;
@@ -1387,7 +1387,6 @@ void scene_wining(void) BANKED {
                 rbar = 1;
                 wth = wtd;
                 gth = gtd;
-                if (winphase == 1 || winphase == 2) { winphase = 3; }
             }
             frame();
         }

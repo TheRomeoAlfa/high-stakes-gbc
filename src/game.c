@@ -156,6 +156,7 @@ static const canvas_t CV_BONUS = {cvbuf, 0, 0, 0, 0, 4, 2, 0, 0};
 // At rest it is BG (sprites would crowd the 10-a-line limit with cards flying in, tokens,
 // chips); only while the stake slides it is sprites, which follow the stake.
 static const canvas_t CV_BONUS_BG = {cvbuf, 90, 0, 0, 1, 5, 2, 1, 0};
+static uint8_t scoring;    // the score panel is up (the pass box goes)
 static uint8_t bonus_bg;   // the BG box is up
 static int16_t bg_val;     // and what it shows
 static uint8_t bg_hl;
@@ -269,7 +270,7 @@ static void bonus_place(void) {
     // drawn from what is wanted now, not the sprite tiles: those wait in the HUD queue
     // (behind the help text after a deal), and the highlight would linger
     uint8_t hl = bonus_want >> 1;
-    if (!stabx && bonus_rend[0] != -32768) {
+    if (!stabx && !hl && bonus_rend[0] != -32768) {   // (highlighted: the sprites, which have pink)
         if (!bonus_bg || bg_val != bonus_val || bg_hl != hl) {
             const char *t = mlstr(bonus_val, 0);
             uint8_t w = text_w(t) + 7;
@@ -296,9 +297,24 @@ static void hud_bonus(void) {
 }
 
 static void hud_pass_check(void) {
-    uint8_t vis = !bonusmode && result == 0;
+    uint8_t vis = !bonusmode && !scoring;   // up through the pause after a round, as the original
     pass_want = vis | ((cur == 17) << 1);
     if (pass_want != pass_shown) hud_pend |= HP_PASS;
+}
+
+// the highlighted "pass" in pink (the original's colour 14, in no BG palette here): sprites
+// over the button's text, OBJ tiles 124-127, palette 5
+#define PASS_TILE 124
+static void pass_spr_render(void) {
+    static const canvas_t cv = {cvbuf, 0, 0, 0, 0, 2, 2, 0, 0};
+    uint8_t c, *b = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 2048 + 128;   // past the stake box's
+    cv_begin(&cv, 0);
+    cv_print("pass", 0, 0, 1);
+    for (c = 0; c < 2; c++) {   // canvas tiles -> 8x16 pairs
+        memcpy(b + c * 32, cvbuf + c * 16, 16);
+        memcpy(b + c * 32 + 16, cvbuf + (2 + c) * 16, 16);
+    }
+    vram_dma_vbl(b, (uint8_t *)0x8000u + (PASS_TILE << 4), 0, 4, _current_bank);
 }
 
 // renders both pass button variants and the cost label (cost only changes per match)
@@ -766,6 +782,10 @@ static void draw_sprites(void) {
             for (i = 0; i < 4; i++) spr_put16(sx - 1, sy - 1 + i * 16, SPR_STAKE_HL + i * 4, SPRPAL_STAKE_HL);
         }
     }
+    if ((pass_want & 3) == 3) {   // pass highlighted (over hud_pass_draw's text)
+        spr_put(13, 100, PASS_TILE, SPRPAL_PFLOCK);
+        spr_put(21, 100, PASS_TILE + 2, SPRPAL_PFLOCK);
+    }
     // falling stake
     if (pflockdest > 0) {
         uint8_t t = pflocky >= pflockdest ? SPR_PFLOCKCUT : SPR_PFLOCK;
@@ -808,7 +828,7 @@ static void draw_sprites(void) {
         // + stabx). Before the cards flying in: on its lines (10-25) at most two of them fly at
         // once, 6 sprites, so it keeps its 4 of the 10 a line holds.
         int16_t bx = 4 + (stabx >> 4);
-        if (stabx && bx > -32 && bonus_rend[0] != -32768)
+        if ((stabx || (bonus_want & 2)) && bx > -32 && bonus_rend[0] != -32768)
             for (i = 0; i < 4; i++)
                 spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
     }
@@ -902,7 +922,7 @@ void game_frame(void) BANKED {
     hud_pass_check();
     // one HUD canvas per frame, cursor feedback first; none while the help box renders (but
     // the stake's box when it has none yet: it comes in with the stake as the cards are dealt)
-    if ((hud_pend & HP_BONUS) && bonus_rend[0] == -32768) {
+    if ((hud_pend & HP_BONUS) && (bonus_rend[0] == -32768 || bonus_rend[1] != (bonus_want >> 1))) {
         hud_pend &= ~HP_BONUS;
         hud_bonus_draw();
     } else if (hud_pend && !help_busy) {
@@ -940,6 +960,7 @@ static void board_setup(void) {
     cv_begin(&CV_STLBL, 0);
     cv_cprint("stakes", 24, 1, 1);
     cv_draw(&CV_STLBL);
+    pass_spr_render();
     for (i = 0; i < 6; i++) gs_drawn[i] = 255;
     for (i = 0; i < 9; i++) cards[i].fr = 254;
     win_show = 0;
@@ -1196,7 +1217,10 @@ void scene_game(void) BANKED {
                 wait_board(20);
                 if (result == 1) sfx(41);
                 wait_board(50);
-                if (score_phase()) {
+                scoring = 1;
+                i = score_phase();
+                scoring = 0;
+                if (i) {
                     dealround();
                     round_setup_visuals();
                     continue;

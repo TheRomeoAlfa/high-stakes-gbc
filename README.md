@@ -52,6 +52,8 @@ a scanline interrupt on those lines so the board's colours survive inside the ba
 - The menu draws three of the four drifting cards at once (the one farthest out is left
   out), to stay within the Game Boy's 10 sprites a line.
 - The inactive box chip doesn't lift under the cursor (no sprite palette has its colours).
+- The danger area shows its four corners, not the whole dotted rectangle (its edges would
+  take some 20 sprites, past the Game Boy's 10 a line beside the cards' tokens).
 - Music is an approximation: PICO-8 has four identical channels, the GB has two pulse,
   one wave and one noise channel, so voices are routed and custom instruments mapped.
 
