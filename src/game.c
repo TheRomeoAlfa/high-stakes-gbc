@@ -148,6 +148,8 @@ static const canvas_t CV_BONUS = {cvbuf, 0, 0, 0, 0, 4, 2, 0, 0};
 // chips); only while the stake slides it is sprites, which follow the stake.
 static const canvas_t CV_BONUS_BG = {cvbuf, 90, 0, 0, 1, 5, 2, 1, 0};
 static uint8_t bonus_bg;   // the BG box is up
+static int16_t bg_val;     // and what it shows
+static uint8_t bg_hl;
 static const canvas_t CV_PASS = {cvbuf, 100, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_PASS_HL = {cvbuf, 106, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_COST = {cvbuf, 235, 0, 0, 11, 5, 1, 0, 0};
@@ -250,21 +252,25 @@ static void hud_bonus_draw(void) {
         vram_dma_vbl(b, (uint8_t *)0x8000u + (BONUS_TILE << 4), 0, 8, _current_bank);
         bonus_rend[0] = bonus_val;
         bonus_rend[1] = hl;
-        bonus_bg = 0;   // the BG one is redrawn too (bonus_place)
     }
 }
 
 // the stake at rest: the box in the BG; moving: off the BG (draw_sprites shows sprites)
 static void bonus_place(void) {
+    // drawn from what is wanted now, not the sprite tiles: those wait in the HUD queue
+    // (behind the help text after a deal), and the highlight would linger
+    uint8_t hl = bonus_want >> 1;
     if (!stabx && bonus_rend[0] != -32768) {
-        if (!bonus_bg) {
+        if (!bonus_bg || bg_val != bonus_val || bg_hl != hl) {
             const char *t = mlstr(bonus_val, 0);
             uint8_t w = text_w(t) + 7;
             cv_begin(&CV_BONUS_BG, 0);
             cv_frame(20 - w / 2, 2, w + 1, 9, 1);
-            cv_cprint(t, 21, 4, bonus_rend[1] ? 3 : 2);
+            cv_cprint(t, 21, 4, hl ? 3 : 2);
             cv_draw(&CV_BONUS_BG);
             bonus_bg = 1;
+            bg_val = bonus_val;
+            bg_hl = hl;
         }
     } else if (bonus_bg) {
         map_tiles(0, 0, 1, 5, 2, 0);
