@@ -133,6 +133,17 @@ def tiles_of(img):
             yield tx, ty, [row[tx * 8:tx * 8 + 8] for row in img[ty * 8:ty * 8 + 8]]
 
 
+def card_tile_err(tile, pal):
+    """tile_err for card art: the border (colour 10) counts 8x, so a tile where it meets the
+    face picks a palette that keeps it (a broken frame shows more than a shaded pixel)"""
+    e = 0
+    for row in tile:
+        for c in row:
+            d = min(dist(c, p) for p in pal)
+            e += d * 8 if c == 10 else d
+    return e
+
+
 def tile_err(tile, pal):
     e = 0
     for row in tile:
@@ -201,12 +212,13 @@ def derive_palettes(tiles, n, forced):
     return res
 
 
-def convert_bg(img, pals, pool, palbase, bank):
+def convert_bg(img, pals, pool, palbase, bank, err=None):
     """img (pico colours, T->0). Returns (map ids, attrs) lists row-major."""
     ids, attrs = [], []
     h, w = len(img) // 8, len(img[0]) // 8
+    err = err or tile_err
     for tx, ty, t in tiles_of([[0 if c == T else c for c in row] for row in img]):
-        pi = min(range(len(pals)), key=lambda i: tile_err(t, pals[i]))
+        pi = min(range(len(pals)), key=lambda i: err(t, pals[i]))
         idx, fl = pool.add(map_tile(t, pals[pi]))
         ids.append(idx & 255)
         attrs.append((palbase + pi) | fl | (8 if bank else 0))
@@ -492,7 +504,7 @@ def lift_record(reg, card_pals, pref):
     for ty in range(5):
         for tx in range(3):
             t = [[0 if c == T else c for c in r[tx * 8:tx * 8 + 8]] for r in reg[ty * 8:ty * 8 + 8]]
-            pi = min(order, key=lambda i: tile_err(t, card_pals[i]))
+            pi = min(order, key=lambda i: card_tile_err(t, card_pals[i]))
             pals.append(1 + pi)
             tiles += enc_tile(map_tile(t, card_pals[pi]))
             if ty == 0:
@@ -599,7 +611,7 @@ def lift_frames(faces, back, card_pals, slot_bot, slot_pals):
     for fr in frames:
         for tx in range(3):
             t = [[0 if c == T else c for c in r[tx * 8:tx * 8 + 8]] for r in fr[24:32]]
-            pi = min(range(len(card_pals)), key=lambda i: tile_err(t, card_pals[i]))
+            pi = min(range(len(card_pals)), key=lambda i: card_tile_err(t, card_pals[i]))
             bases.append((1 + pi, map_tile(t, card_pals[pi])))
     bases += slot_bot
     bot = []
@@ -624,7 +636,7 @@ def lift_frames(faces, back, card_pals, slot_bot, slot_pals):
             for tx in range(3):
                 rows = [r[tx * 8:tx * 8 + 8] for r in reg[0:8]]
                 t = [[0 if c == T else c for c in r] for r in rows]
-                pi = min(order, key=lambda i: tile_err(t, card_pals[i]))
+                pi = min(order, key=lambda i: card_tile_err(t, card_pals[i]))
                 cards3.append((1 + pi, map_tile(t, card_pals[pi]), [[c != T for c in r] for r in rows]))
             for var in variants:
                 tiles, pals = [], []
@@ -785,13 +797,15 @@ def main():
             for _, _, t in tiles_of([[0 if c == T else c for c in r] for r in fr]):
                 if not any(c == 10 for row in t for c in row) and any(c != 0 for row in t for c in row):
                     vtiles.append(t)
-    vpals = [[0, 6, 7, 13], [0, 5, 13, 8]]
+    # vampire faces: skull grays + white, and red (the V) + the border plum + lavender, so
+    # the tiles where the border meets the V or the skull keep the border (chosen by search)
+    vpals = [[0, 5, 6, 7], [0, 8, 10, 13]]
     card_pals = [FRONT_PAL, BACK_PAL] + vpals
     print('vampire palettes', vpals)
     cpool = Pool(0, 256)
     fmap, fattr = [], []
     for fr in frames:
-        ids, attrs, _, _ = convert_bg(fr, card_pals, cpool, 1, 1)
+        ids, attrs, _, _ = convert_bg(fr, card_pals, cpool, 1, 1, card_tile_err)
         fmap += ids
         fattr += attrs
     print('card tiles', len(cpool.tiles))
