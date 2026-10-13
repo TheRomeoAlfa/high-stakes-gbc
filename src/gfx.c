@@ -1217,6 +1217,30 @@ uint8_t win_cut;
 static uint8_t nspr, nspr_prev;
 static uint8_t *oam_p = (uint8_t *)shadow_OAM;
 
+// a w x h block (w <= 8) of 8x8 sprites, tiles t, t + 1, ... row by row, attributes
+// pr[k] | or_, clipped per sprite as spr_put (no win_cut): one call for a menu card's 12
+void spr_grid(int16_t x, int16_t y, uint8_t t, const uint8_t *pr, uint8_t or_, uint8_t w, uint8_t h) {
+    int16_t sy = y + cam_y + 16, sx = x + cam_x + 8;
+    uint8_t r, c, cm = 0, xs[8], *o = oam_p, n = nspr;
+    for (c = 0; c < w; c++, sx += 8) {
+        xs[c] = (uint8_t)sx;
+        if (sx > 0 && sx < 168) cm |= 1 << c;
+    }
+    for (r = 0; r < h; r++, sy += 8) {
+        if (sy <= 0 || sy >= 160 || !cm) { t += w; pr += w; continue; }
+        for (c = 0; c < w; c++, t++, pr++) {
+            if (!(cm & (1 << c)) || n >= 40) continue;
+            *o++ = (uint8_t)sy;
+            *o++ = xs[c];
+            *o++ = t;
+            *o++ = *pr | or_;
+            n++;
+        }
+    }
+    oam_p = o;
+    nspr = n;
+}
+
 // writes straight into shadow OAM; sprites are hidden again only if unused this frame.
 // SDCC sm83 convention: DE = x, BC = y, tile and prop are bytes on the stack (callee pops).
 void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop) __naked {

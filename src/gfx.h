@@ -86,6 +86,7 @@ void copy_objpals(uint8_t first, uint8_t n, const uint16_t *src);
 
 // ---- sprites
 extern int8_t cam_x, cam_y;
+void spr_grid(int16_t x, int16_t y, uint8_t t, const uint8_t *pr, uint8_t or_, uint8_t w, uint8_t h);
 void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop);
 void spr_put16(int16_t x, int16_t y, uint8_t tile, uint8_t prop);  // 16x16 (2 tiles pairs)
 void spr_end(void);

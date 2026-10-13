@@ -574,7 +574,7 @@ static const uint8_t mturn[151] = {
 static void menu_cards(int16_t mxp, int16_t d) {
     // drift phases: (t + i * 0.79) / 2 and / 3 in 64ths of a turn, 8.8 (546 / 364 a frame)
     static uint16_t ax[4] = {0, 25887u, 51774u, 12125u}, ay[4] = {0, 17257u, 34514u, 51771u};
-    uint8_t i, p, k, far = 0;
+    uint8_t i, k, far = 0;
     int16_t fd = -1, c = 64 - mxp + 10 - 80;
     // three cards at most: a line crosses one sprite row of each card, 3 sprites a card,
     // and 10 a line is the hardware's limit; the card farthest from the centre is left out
@@ -592,13 +592,7 @@ static void menu_cards(int16_t mxp, int16_t d) {
         if (dx < 0) dx = -dx;
         top = 16 + d + mdip[dx > 150 ? 63 : mturn[dx]] + mdrift[(uint8_t)(ay[i] >> 10) & 63];
         k = i * 12;
-        for (p = 0; p < 4; p++) {   // rows of 3 (no division: 16-bit % and / cost a frame)
-            int16_t y = top + (p << 3), x = left;
-            uint8_t n;
-            for (n = 0; n < 3; n++, k++, x += 8)
-                if (x > -8 && x < 168 && y > -8 && y < 144)
-                    spr_put(x, y, MENU_SPR + k, menu_spr_pal[k] | 0x08);   // OBJ bank 1
-        }
+        spr_grid(left, top, MENU_SPR + k, menu_spr_pal + k, 0x08, 3, 4);   // OBJ bank 1
     }
 }
 
