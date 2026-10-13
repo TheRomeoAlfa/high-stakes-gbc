@@ -144,6 +144,10 @@ static const canvas_t CV_STLBL = {cvbuf, 84, 0, 7, 17, 6, 1, 1, 0};
 // stake bonus box: rendered here (4x2 tiles), shown as sprites so it slides with the stake
 static const canvas_t CV_BONUS = {cvbuf, 0, 0, 0, 0, 4, 2, 0, 0};
 #define BONUS_TILE 116   // OBJ tiles 116-123 (spare in the game scene)
+// At rest it is BG (sprites would crowd the 10-a-line limit with cards flying in, tokens,
+// chips); only while the stake slides it is sprites, which follow the stake.
+static const canvas_t CV_BONUS_BG = {cvbuf, 90, 0, 0, 1, 5, 2, 1, 0};
+static uint8_t bonus_bg;   // the BG box is up
 static const canvas_t CV_PASS = {cvbuf, 100, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_PASS_HL = {cvbuf, 106, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_COST = {cvbuf, 235, 0, 0, 11, 5, 1, 0, 0};
@@ -246,6 +250,25 @@ static void hud_bonus_draw(void) {
         vram_dma_vbl(b, (uint8_t *)0x8000u + (BONUS_TILE << 4), 0, 8, _current_bank);
         bonus_rend[0] = bonus_val;
         bonus_rend[1] = hl;
+        bonus_bg = 0;   // the BG one is redrawn too (bonus_place)
+    }
+}
+
+// the stake at rest: the box in the BG; moving: off the BG (draw_sprites shows sprites)
+static void bonus_place(void) {
+    if (!stabx && bonus_rend[0] != -32768) {
+        if (!bonus_bg) {
+            const char *t = mlstr(bonus_val, 0);
+            uint8_t w = text_w(t) + 7;
+            cv_begin(&CV_BONUS_BG, 0);
+            cv_frame(20 - w / 2, 2, w + 1, 9, 1);
+            cv_cprint(t, 21, 4, bonus_rend[1] ? 3 : 2);
+            cv_draw(&CV_BONUS_BG);
+            bonus_bg = 1;
+        }
+    } else if (bonus_bg) {
+        map_tiles(0, 0, 1, 5, 2, 0);
+        bonus_bg = 0;
     }
 }
 
@@ -782,7 +805,9 @@ static void draw_sprites(void) {
     }
     {   // stake bonus box: centred 4 px right of the stake (bonx = 17 - bonw / 2 + stabx)
         int16_t bx = 4 + (stabx >> 4);
-        if (bx > -32 && bonus_rend[0] != -32768)
+        uint8_t k;
+        for (k = 0; k < 9 && cards[k].ani != 2; k++);   // dealing: it waits for the stake
+        if (stabx && k == 9 && bx > -32 && bonus_rend[0] != -32768)
             for (i = 0; i < 4; i++)
                 spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
     }
@@ -868,6 +893,7 @@ void game_frame(void) BANKED {
         else { hud_pend &= ~HP_WINV; hud_winv(); }
     }
     help_busy = 0;
+    bonus_place();
 #ifdef DEBUG_FPS
     if ((frames & 63) == 0) {
         cv_begin(&CV_STLBL, 0);
@@ -1024,9 +1050,11 @@ static uint8_t do_cards(void) {
                 sfx(58);
             }
             d = tx - fx[i];
-            fx[i] = d > -5 && d < 5 ? tx : fx[i] + d / 5;   // within 0.3 px: there
+            // within a pixel: there (the original's 0.3 px tail would keep several cards
+            // in the air on the same lines, past the 10 sprites a line)
+            fx[i] = d > -16 && d < 16 ? tx : fx[i] + d / 5;
             d = ty - fy[i];
-            fy[i] = d > -5 && d < 5 ? ty : fy[i] + d / 5;
+            fy[i] = d > -16 && d < 16 ? ty : fy[i] + d / 5;
             fz[i] += fzd[i];
             fzd[i] -= 38;
             if (fz[i] <= 0) fz[i] = fzd[i] = 0;

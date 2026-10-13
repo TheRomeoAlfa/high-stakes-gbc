@@ -455,11 +455,20 @@ static const int8_t mcos[64] = {
 };
 
 static void menu_cards(int16_t mxp, int16_t d, uint16_t t) {
-    uint8_t n, i, p, k;
-    for (n = 0; n < 4; n++) {   // the selected card first: it wins the per-line sprite limit
+    uint8_t n, i, p, k, far;
+    int16_t fd = -1;
+    // three cards at most: a line crosses one sprite row of each card, 3 sprites a card,
+    // and 10 a line is the hardware's limit; the card farthest from the centre is left out
+    for (i = 0; i < 4; i++) {
+        int16_t c = 64 + i * 48 - mxp + 10 - 80;
+        if (c < 0) c = -c;
+        if (c > fd) { fd = c; far = i; }
+    }
+    for (n = 0; n < 4; n++) {
         int16_t left, top, dx;
         int8_t rx, ry, dip;
-        i = n == 0 ? mnucur : (n <= mnucur ? n - 1 : n);
+        i = n;
+        if (i == far) continue;
         rx = (int8_t)(((int16_t)mcos[(uint8_t)((t * 546u + i * 25887u) >> 10) & 63] * 109) >> 13);
         ry = (int8_t)(((int16_t)mcos[(uint8_t)((t * 364u + i * 17257u) >> 10) & 63] * 109) >> 13);
         left = 64 + i * 48 - mxp + rx;

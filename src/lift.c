@@ -336,12 +336,15 @@ static void lift_render(uint8_t s) {
     for (j = 3; j < 15; j++) L->attrs[j] = lift_hdr[j] | bankbit;
     vram_dma_vbl(rec + LIFT_HDR, dst + 48, s, 12, bank);
     map_put_vbl(L->mx, L->my, 3, 5, L->ids, L->attrs);
-    // shadow sprites (the hover frame has the 1 px raised one)
-    j = t == LIFT_FR_HOVER ? 21 : t;
-    rec = lift_shadow + ((uint16_t)j << 8) - ((uint16_t)j << 5) - ((uint16_t)j << 4);   // j * 208
-    bank = lift_bank(255);
-    banked_copy(&L->shused, bank, rec, 1);
-    vram_dma_vbl(rec + 16, (uint8_t *)0x8000u + (uint16_t)s * 12 * 16, 1, 12, bank);
+    // shadow sprites; none under the cursor's 1 px lift (a sliver, and it would hold three
+    // sprites on those lines for as long as the cursor stays, crowding the 10-a-line limit)
+    if (t == LIFT_FR_HOVER) L->shused = 0;
+    else {
+        rec = lift_shadow + ((uint16_t)t << 8) - ((uint16_t)t << 5) - ((uint16_t)t << 4);   // t * 208
+        bank = lift_bank(255);
+        banked_copy(&L->shused, bank, rec, 1);
+        vram_dma_vbl(rec + 16, (uint8_t *)0x8000u + (uint16_t)s * 12 * 16, 1, 12, bank);
+    }
     L->drawn = t;
 }
 

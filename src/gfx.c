@@ -1343,7 +1343,12 @@ void frame(void) {
     }
     if (pal_dirty && fadelvl) pal_prepare();
     if (!spr_hold) spr_end();
+    // the sprites are complete: copy them to OAM at this VBlank only. Between frames the
+    // copy is off, so a loop that runs into VBlank while drawing (it happens) shows the last
+    // frame's sprites rather than a mix of two frames.
+    ENABLE_OAM_DMA;
     vsync();
+    DISABLE_OAM_DMA;
     // VBlank work: DMA first (it must finish before the screen starts), the palettes, then
     // map blocks
     if (vd_n) vd_flush();
@@ -1402,7 +1407,9 @@ void screen_off(void) {
     fading_out = 1;
     pal_prepare();
     spr_end();
+    ENABLE_OAM_DMA;
     vsync();
+    DISABLE_OAM_DMA;
     pal_apply();
     pal_dirty = 0;
 }
