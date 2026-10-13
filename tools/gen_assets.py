@@ -846,11 +846,11 @@ def main():
                 5: (93, 21, 7, 10), 6: (100, 21, 7, 10), 7: (19, 15, 9, 8), 8: (19, 23, 9, 8),
                 9: (28, 31, 13, 10), 10: (41, 31, 13, 10)}
 
-    def chip_img(s, cap=None):
+    def chip_img(s, cap=None, dx=0):
         x, y, w, h = chip_spr[s]
         img = crop(x, y, w, h, transp=(11,))
         if cap:
-            cx = 7 - len(cap) * 2
+            cx = 7 - len(cap) * 2 + dx
             for i, ch in enumerate(cap):
                 for yy, r in enumerate(FONT[ch].split()):
                     for xx, c in enumerate(r):
@@ -915,7 +915,7 @@ def main():
     hand = crop(10, 15, 9, 10, transp=(11,))   # full 9x10 hand, fingertip at (3, 0)
     sdef('HAND', hand, 0, keep_empty=True)
     for v in range(2, 10):
-        sdef('TOK%d' % v, chip_img(1, '%d+' % v), 1)
+        sdef('TOK%d' % v, chip_img(1, '%d+' % v, 1), 1)   # 1 px right: cprint centres 2 chars 1 px left
     sdef('CHIP_PLUS', chip_img(1, '+'), 1)
     sdef('CHIP_ARROWS', chip_img(3), 2)
     sdef('CHIP_BOX', chip_img(9), 3)

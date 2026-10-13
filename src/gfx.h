@@ -20,7 +20,8 @@ typedef struct {
 
 extern uint8_t ring_flip;   // frame(): switch LCDC.4 (the two ring tile copies) at VBlank
 extern uint8_t ring_vram;
-extern uint8_t spr_split, spl_ly, cut_ly;   // frame() / main.c: sprite size split and cut lines   // the rings wrote over the card tiles: reset_screen reloads them
+extern uint8_t spr_split, spl_ly, cut_ly;
+extern uint8_t vq_first;   // frame() / main.c: sprite size split and cut lines   // the rings wrote over the card tiles: reset_screen reloads them
 extern uint8_t cvbuf[];   // shared scratch (160 tiles)
 extern uint8_t dlgbuf[];  // persistent buffer for dialog / help text (80 tiles)
 

@@ -7,4 +7,8 @@
 extern uint8_t *strip;   // 16-byte aligned: the strip's 12 tiles, then the vial's top row (4)
 void strip_draw(uint8_t wh) BANKED;   // wh: drpwh in hundredths (0 = flat)
 
+// title_to_menu: frame nt (0-40) of the menu's bar rising over the title's; shown: its 10
+// half columns' rows so far
+void mound_step(uint8_t nt, uint8_t *shown) BANKED;
+
 #endif

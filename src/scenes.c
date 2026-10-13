@@ -692,10 +692,11 @@ static uint8_t menu_warm;   // title_to_menu left the menu on screen
 // to the chosen card. Then scene_menu takes over the screen as it is (menu_warm).
 // The logo is 8x16 sprites and the cards 8x8: the LCD interrupt switches between them.
 static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
-    static const uint8_t zlo[6] = {0, 15, 26, 41, 60, 80}, zhi[6] = {15, 26, 41, 60, 80, 110};
+    static const uint8_t zlo[6] = {0, 15, 26, 41, 60, 80};
     static const uint8_t blank[10] = {0};
     int16_t my = 69 << 8, dy = (int16_t)sy0 << 8, cy, mxp = (int16_t)mnucur * 48 - 4;
     uint8_t z, rb, set, nt = 0, cols[6], shown[6] = {255}, flash = 255, f;   // nt: frames, 40 = circtme 0
+    uint8_t mshown[10] = {0};
     cv_place_rings(cvs, blank);   // no streak line on the menu
     set_bgpal(7, 8, 0, 9, 10);    // the bar's colours (the streak's before)
     if (scoremode) {   // the title drew the bar with the streak, and the text for "continue"
@@ -705,9 +706,9 @@ static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
         cv_dma(&CV_BAR2, 1792);   // past the title's canvases in cvbuf
     }
     copy_objpals(0, 4, card_pals);
-    WY_REG = 144;
-    win_show = 1;
     cut_ly = 104;   // the cards stay behind the bars
+    mound_step(0, mshown);   // (the title's bar as it is, into the block it then changes)
+    vq_first = 1;
     spr_split = 1;
     for (;;) {
         if (nt < 40) nt++;
@@ -715,20 +716,19 @@ static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
         if (my < 256) my = 0;   // the last pixel: the menu's cards are still
         // the rings' centre moves to the card, 0.5 px a frame (the title's sets, then 7-9)
         if (dy > -14 * 256) dy -= 141;
-        set = dy >= -896 ? (uint8_t)(((dy + 128) >> 8) + 3) : dy >= -9 * 256 ? 7 : dy >= -3200 ? 8 : 9;
+        // (the title's set until -3, not each pixel of it: fewer uploads while everything moves)
+        set = dy >= -3 * 256 ? (uint8_t)(sy0 + 3) : dy >= -5 * 256 ? 0 : dy >= -9 * 256 ? 7 : dy >= -3200 ? 8 : 9;
         rings_update(set);
         // switched from the middle out, the zone at the edge bright
         rb = (uint8_t)(((uint16_t)nt * 11) >> 2);   // 0..110 px
-        for (z = 0; z < 6; z++)
-            cols[z] = rb >= zhi[z] ? ring_cols2[z] : rb > zlo[z] || (!z && rb) ? 15 : ring_cols1[z];
+        for (z = 0; z < 6; z++)   // bright for one ring's width (the original's one ring), then the menu's
+            cols[z] = rb >= zlo[z] + 10 ? ring_cols2[z] : rb > zlo[z] || (!z && rb) ? 15 : ring_cols1[z];
         for (z = 0; z < 6 && cols[z] == shown[z]; z++);
         if (z < 6) {
             memcpy(shown, cols, 6);
             ring_pals(cols);
         }
-        // the menu's bar rises 40 px * (1 - (circtme / 100)^2)
-        z = 40 - nt;   // circtme 0..40
-        WY_REG = 104 + (uint8_t)(((((uint16_t)z * z) >> 3) * 205) >> 10);   // z * z / 40
+        mound_step(nt, mshown);   // the menu's bar rises over the title's from the middle out
         // the logo rises with the cards, and 20 px more
         cy = 50 + sy0 + (my >> 8) - 69 - (nt >> 1);
         if (cy > -22) {   // (its split line kept off line 0: LYC 0 also matches during line 153)
@@ -746,6 +746,9 @@ static void title_to_menu(const canvas_t *cvs, int8_t sy0) {
         frame();
         if (nt == 40 && !my && !spl_ly && set == 9) break;
     }
+    WY_REG = 104;   // the menu's bar whole (the mound leaves the corners), in the window
+    win_show = 1;
+    vq_first = 0;
     menu_warm = 1;
 }
 

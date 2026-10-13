@@ -69,7 +69,7 @@ void reset_screen(void) BANKED {
     WY_REG = 144;
     box_on = 0;
     ring_flip = 0;
-    spr_split = spl_ly = cut_ly = 0;
+    spr_split = spl_ly = cut_ly = vq_first = 0;
     LCDC_REG |= LCDCF_OBJON;
     LCDC_REG &= ~LCDCF_BG8000;
     if (ring_vram) {   // the title, menu and winnings rings used VRAM bank 1
@@ -803,6 +803,14 @@ static void draw_sprites(void) {
         if (t && (!gs_drawn[i] || map_vbl_pending(slot_tx[i], slot_ty[i])))
             spr_put16(slot_tx[i] * 8 + 5, slot_ty[i] * 8 + 3 - ((gz[i] + 15) >> 4), t, held_pal[gs[i]]);
     }
+    {   // stake bonus box, moving with the stake: centred 4 px right of it (bonx = 17 - bonw / 2
+        // + stabx). Before the cards flying in: on its lines (10-25) at most two of them fly at
+        // once, 6 sprites, so it keeps its 4 of the 10 a line holds.
+        int16_t bx = 4 + (stabx >> 4);
+        if (stabx && bx > -32 && bonus_rend[0] != -32768)
+            for (i = 0; i < 4; i++)
+                spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
+    }
     {   // cards flying in (dealing)
         uint8_t k;
         int16_t x, y;
@@ -816,14 +824,6 @@ static void draw_sprites(void) {
                     spr_put(px, py, SPR_CARDBACK + i * 2, SPRPAL_CARDBACK);
             }
         }
-    }
-    {   // stake bonus box: centred 4 px right of the stake (bonx = 17 - bonw / 2 + stabx)
-        int16_t bx = 4 + (stabx >> 4);
-        uint8_t k;
-        for (k = 0; k < 9 && cards[k].ani != 2; k++);   // dealing: it waits for the stake
-        if (stabx && k == 9 && bx > -32 && bonus_rend[0] != -32768)
-            for (i = 0; i < 4; i++)
-                spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
     }
     lift_sprites();   // card shadows under everything else
 }
@@ -899,8 +899,12 @@ void game_frame(void) BANKED {
     gtxt_changed = 0;
     hud_bonus_check();
     hud_pass_check();
-    // one HUD canvas per frame, cursor feedback first; none while the help box renders
-    if (hud_pend && !help_busy) {
+    // one HUD canvas per frame, cursor feedback first; none while the help box renders (but
+    // the stake's box when it has none yet: it comes in with the stake as the cards are dealt)
+    if ((hud_pend & HP_BONUS) && bonus_rend[0] == -32768) {
+        hud_pend &= ~HP_BONUS;
+        hud_bonus_draw();
+    } else if (hud_pend && !help_busy) {
         if (hud_pend & HP_PASS) { hud_pend &= ~HP_PASS; hud_pass_draw(); }
         else if (hud_pend & HP_BONUS) { hud_pend &= ~HP_BONUS; hud_bonus_draw(); }
         else if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(); }

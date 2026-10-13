@@ -1,4 +1,5 @@
-// The winnings bar's rippling edge (scenes.c scene_wining)
+// The bars' effects: the winnings bar's rippling edge (scenes.c scene_wining) and the menu's
+// bar rising over the title's (title_to_menu)
 #pragma bank 255
 #include <gb/gb.h>
 #include <string.h>
@@ -119,3 +120,110 @@ void strip_draw(uint8_t wh) BANKED {
     vram_dma_vbl(strip, (uint8_t *)0x8000u + (STRIP_TILE << 4), 0, 12, _current_bank);
 }
 
+
+// the red rising over the title's bar (the original's mound, (cos(..) + 1) * 19.5 px from the
+// middle out, as 1 - (circtme / 100)^2): for each frame and cell column out from the middle,
+// how many of the bar's 5 rows the menu's bar shows in, from the bottom
+static const uint8_t mound[41 * 10] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    2, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+    3, 2, 1, 0, 0, 0, 0, 0, 0, 0,
+    4, 3, 2, 1, 0, 0, 0, 0, 0, 0,
+    5, 4, 3, 2, 1, 0, 0, 0, 0, 0,
+    5, 4, 3, 2, 1, 1, 0, 0, 0, 0,
+    5, 5, 4, 3, 2, 1, 0, 0, 0, 0,
+    5, 5, 5, 4, 3, 2, 1, 0, 0, 0,
+    5, 5, 5, 4, 3, 2, 1, 1, 0, 0,
+    5, 5, 5, 5, 4, 3, 2, 1, 0, 0,
+    5, 5, 5, 5, 5, 4, 3, 2, 1, 0,
+    5, 5, 5, 5, 5, 4, 3, 2, 1, 1,
+    5, 5, 5, 5, 5, 5, 4, 3, 2, 1,
+    5, 5, 5, 5, 5, 5, 4, 3, 2, 1,
+    5, 5, 5, 5, 5, 5, 5, 4, 3, 2,
+    5, 5, 5, 5, 5, 5, 5, 4, 3, 2,
+    5, 5, 5, 5, 5, 5, 5, 5, 4, 3,
+    5, 5, 5, 5, 5, 5, 5, 5, 4, 3,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 4,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 4,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5
+};
+
+// the title's bar (rows 13-17) with the mound over it, column c: red in the bottom n cells, the
+// title's above; the menu's bar (vial, number) once it is all red. The bar goes by rows in
+// VBlank (map_put_vbl reads them then): rows copy faster than columns.
+// (in cvbuf: idle in the move but for the bar's number at 1792, scenes.c)
+#define MB_T (cvbuf + 1024)
+#define MB_A (cvbuf + 1124)
+// the cells: the menu's bar (as in the window) and the title's (its bar canvas, the options)
+static const uint8_t bar_t[100] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 154, 155, 156, 157, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 158, 159, 160, 161, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 162, 163, 164, 165, 0, 0, 0, 0, 0, 0, 0, 0,
+    166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185,
+    186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205
+};
+static const uint8_t ttl_t[100] = {
+    128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147,
+    148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
+    168, 169, 170, 171, 172, 173, 174, 238, 239, 240, 241, 242, 243, 181, 182, 183, 184, 185, 186, 187,
+    188, 189, 190, 191, 192, 193, 194, 244, 245, 246, 247, 248, 249, 201, 202, 203, 204, 205, 206, 207,
+    208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227
+};
+static void mound_col(uint8_t c, uint8_t n) {
+    uint8_t *t = MB_T + c, k;
+    const uint8_t *s;
+    if (n == 5) {
+        for (s = bar_t + c, k = 5; k; k--, t += 20, s += 20) {
+            t[0] = *s;
+            t[100] = *s ? 0x8F : 0x0F;   // (MB_A = MB_T + 100)
+        }
+        return;
+    }
+    for (s = ttl_t + c, k = 5 - n; k; k--, t += 20, s += 20) {
+        t[0] = *s;
+        t[100] = 6;
+    }
+    for (; n; n--, t += 20) {   // red
+        t[0] = 0;
+        t[100] = 0x0F;
+    }
+}
+
+void mound_step(uint8_t nt, uint8_t *shown) BANKED {
+    static const uint8_t below[6] = {0, 0x10, 0x18, 0x1C, 0x1E, 0x1F};   // rows 5 - n.. as bits 4..0
+    uint8_t z, n, rows = 0;
+    const uint8_t *m = mound + nt * 10;
+    if (!nt)
+        for (z = 0; z < 20; z++) mound_col(z, 0);
+    for (z = 0; z < 10; z++) {
+        n = m[z];
+        if (n != shown[z]) {
+            rows |= n == 5 ? 0x1F : below[n] & ~below[shown[z]];   // the rows that change
+            shown[z] = n;
+            mound_col(10 + z, n);
+            mound_col(9 - z, n);
+        }
+    }
+    for (z = 0; z < 5; z++)   // a row a block: each fits what is left of a VBlank (vq_flush)
+        if (rows & (0x01 << z)) map_put_vbl(0, 13 + z, 20, 1, MB_T + z * 20, MB_A + z * 20);
+}

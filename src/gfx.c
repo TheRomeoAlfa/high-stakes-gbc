@@ -1539,6 +1539,7 @@ uint8_t ring_flip, ring_vram;
 // sprites split by the LCD interrupt (main.c): 8x16 above spl_ly, 8x8 from it (the title's
 // logo over the menu's cards); none from cut_ly (under the bar). Off when spr_split is 0.
 uint8_t spr_split, spl_ly, cut_ly;
+uint8_t vq_first;   // frame(): map blocks before DMA (they show tiles already in VRAM)
 uint8_t box_nly0, box_nly1, box_nscy;   // next frame's, taken in VBlank
 
 void frame(void) {
@@ -1564,6 +1565,7 @@ void frame(void) {
         pal_apply();
         pal_dirty = 0;
     }
+    if (vq_first && vq_n) vq_flush();   // map blocks that need no tiles from the DMA
     if (vd_n) vd_flush();
     if (!vd_n && vq_n) vq_flush();
     SCX_REG = scx - cam_x;
