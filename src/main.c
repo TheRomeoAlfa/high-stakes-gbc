@@ -45,6 +45,18 @@ static void band_write(const uint8_t *p) {   // in HBlank: palette RAM is locked
 // line it triggered on is already being drawn, and a window switched off mid-line leaves
 // its left part showing.
 static void lcd_isr(void) {
+    if (box_on) {   // dialog box lines: their own scroll (gfx.c box_on)
+        uint8_t ly = LY_REG;
+        while (STAT_REG & 3);
+        if (ly >= 143 || ly < box_ly0) {   // the box starts (next frame's top if at 143)
+            SCY_REG = box_scy;
+            LYC_REG = box_ly1 - 1;
+        } else {                            // the box ends
+            SCY_REG = scy - cam_y;
+            LYC_REG = box_ly0 ? box_ly0 - 1 : 143;   // so a late frame() keeps it up
+        }
+        return;
+    }
     if (LYC_REG == BAND_LY - 1) {
         while (STAT_REG & 3);
         band_write(band_pal);

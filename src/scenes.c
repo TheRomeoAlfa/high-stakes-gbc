@@ -60,6 +60,35 @@ static const char *dlg_text;
 static uint8_t dlg_pos, dlg_len;
 static int16_t dlg_x, dlg_y;
 
+// The box (and its card) slides down from above the screen as the original's helpy
+// (/4 a frame): it is drawn in BG rows 20-23, shown at any line by a scroll split.
+#define BOX_ROW 20
+static int16_t box_y, box_ty;   // 8.8 screen line of the box's top, and its target
+
+static void box_place(void) {
+    int16_t y = box_y >> 8;
+    if (y < -31) y = -31;
+    box_nly0 = y > 0 ? (uint8_t)y : 0;
+    box_nly1 = (uint8_t)(y + 32);
+    box_nscy = (uint8_t)(BOX_ROW * 8 - y);
+}
+
+static void dlg_slide_in(int16_t ty) {
+    map_fill(0, 0, BOX_ROW - 2, 20, 6, 0, 0);   // rows above the box show while it is high
+    box_ty = ty << 8;
+    box_y = -31 << 8;
+    box_place();
+    box_on = 1;
+}
+
+static void dlg_slide(void) {
+    if (box_y != box_ty) {
+        int16_t d = (box_ty - box_y) / 4;
+        box_y += d ? d : box_ty - box_y;
+        box_place();
+    }
+}
+
 void dlg_setup(uint8_t ty, uint8_t with_card) BANKED {
     cv_dlg.y = ty;
     cv_dlg.x = with_card ? 5 : 1;
@@ -163,6 +192,7 @@ void scene_start(void) BANKED {
     static const canvas_t bar = {cvbuf, 100, 0, 0, 13, 20, 5, 4, 0};
     static const canvas_t cvs = {cvbuf, 200, 0, 5, 12, 10, 1, 5, 0};
     uint8_t stcur = 0, redraw = 1, flash = 0;
+    uint16_t bx = 0, by = 0;
     nst = 0;
     if (blood > 0 && blood < 5000) stmnu[nst++] = "continue";
     stmnu[nst++] = "new game";
@@ -207,7 +237,10 @@ void scene_start(void) BANKED {
                 pal_dirty = 1;
             }
         }
-        draw_logo(80 + sintab[(frames >> 2) & 31], 50 + sintab[((frames * 3) >> 4) & 31]);
+        // cos(t/3), cos(t/4): periods 180 and 240 frames, 32 steps each (8.8)
+        bx += 46;
+        by += 34;
+        draw_logo(80 + sintab[(bx >> 8) & 31], 50 + sintab[(by >> 8) & 31]);
         if (BTNP(J_LEFT) && stcur > 0) { stcur--; sfx(63); redraw = 1; }
         else if (BTNP(J_RIGHT) && stcur < nst - 1) { stcur++; sfx(63); redraw = 1; }
         if (BTNP(J_A | J_START)) {
@@ -248,12 +281,14 @@ void scene_intro(void) BANKED {
     blood = blood_txt = 5000;
     mult = 1;
     ticksfx = 0;
-    dlg_setup(1, 1);
+    dlg_slide_in(8);
+    dlg_setup(BOX_ROW, 1);
     dlg_say(talk[0]);
     gtxt_changed = 4;
     screen_on();
     for (;;) {
         update_gtxt();
+        dlg_slide();
         if (gtxt_changed & 4) {
             cv_begin(&big, 0);
             cv_bignumc(numstr(blood_txt), 40, 2, 3, 1);
@@ -454,7 +489,7 @@ void scene_menu(void) BANKED {
 void scene_ask(void) BANKED {
     static const canvas_t top = {cvbuf, 1, 0, 0, 1, 20, 3, 5, 0};
     static const canvas_t btn = {cvbuf, 70, 0, 4, 11, 12, 2, 5, 0};
-    uint8_t cur = 0, redraw = 1, arrow = 0;
+    uint8_t cur = 0, redraw = 1;
     int16_t cx = 56 * 256;
     fadeout(1);
     reset_screen();
@@ -466,14 +501,13 @@ void scene_ask(void) BANKED {
     cv_cprint("winnings", 80, 2, 1);
     cv_bignumc(numstr(wining), 80, 9, 3, 1);
     cv_draw(&top);
-    dlg_setup(5, 1);
+    dlg_slide_in(40);
+    dlg_setup(BOX_ROW, 1);
     dlg_say("how about a final\nbonus round? double\nwinnings or nothing?");
     screen_on();
     for (;;) {
-        if (dlg_tick()) {
-            uint8_t a = (frames >> 4) & 1;
-            if (a != arrow) { arrow = a; dlg_arrow(a); }
-        }
+        dlg_slide();
+        dlg_tick();   // no "more" arrow here, as in the original (txtbuttx false)
         if (BTNP(J_LEFT)) { if (cur) sfx(63); cur = 0; redraw = 1; }
         else if (BTNP(J_RIGHT)) { if (!cur) sfx(63); cur = 1; redraw = 1; }
         if (redraw) {
@@ -509,9 +543,77 @@ void scene_ask(void) BANKED {
 }
 
 // ------------------------------------------------------------------ winnings screen
+// ------------------------------------------------------------------ winnings drip
+// update_wining / draw_wining: two 1 px lines of blood (x 63/64) run between the number
+// and the vial, each starting after its own delay and speeding up (0.05 px/frame^2), their
+// tails following the same way; the drop at the source swells in, pulses between 1x and 2x
+// its height and shrinks away. Drawn each frame into three 8x16 sprites (spare tiles
+// 116-121), 40 px of the original's clip mapped onto the 42 px between number and vial.
+#define DRIP_TILE 116
+static const uint8_t drip_s64[64] = {   // (sin + 1) / 2, 1/256
+    128, 141, 153, 165, 177, 188, 199, 209, 219, 227, 234, 241, 246, 250, 254, 255,
+    255, 255, 254, 250, 246, 241, 234, 227, 219, 209, 199, 188, 177, 165, 153, 141,
+    128, 115, 103, 91, 79, 68, 57, 47, 37, 29, 22, 15, 10, 6, 2, 1,
+    0, 1, 2, 6, 10, 15, 22, 29, 37, 47, 57, 68, 79, 91, 103, 115
+};
+static const uint8_t drip_drop[7] = {0x7E, 0x3C, 0x3C, 0x18, 0x18, 0x18, 0x18};   // x 61-66
+static int16_t dp_hd[2], dp_hv[2], dp_tl[2], dp_tv[2];   // heads / tails and speeds, 8.8 px
+static uint16_t dp_h, dp_ph;                               // drop height (8.8), pulse phase
+
+static void drip_start(void) {
+    memset(dp_hv, 0, sizeof(dp_hv));
+    memset(dp_tl, 0, sizeof(dp_tl));
+    memset(dp_tv, 0, sizeof(dp_tv));
+    dp_hd[0] = -(int16_t)((uint16_t)rnd(90) << 8);
+    dp_hd[1] = 0;
+    dp_h = 0;
+}
+
+static void drip_step(uint8_t phase) {
+    uint8_t i;
+    for (i = 0; i < 2; i++) {
+        dp_hv[i] += 13;
+        if (phase == 2) dp_tv[i] += 13;
+        // past 100 px nothing changes; stop there before 8.8 overflows
+        if (dp_hd[i] < (100 << 8)) dp_hd[i] += dp_hv[i];
+        if (dp_tl[i] < (100 << 8)) dp_tl[i] += dp_tv[i];
+    }
+    if (phase == 1) dp_h += (256 - dp_h) / 50;
+    else dp_h -= dp_h / 10;
+    dp_ph += 273;   // a turn a second
+}
+
+static void drip_draw(uint8_t up) {
+    uint8_t *b = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 1024;   // past the canvases
+    uint8_t i, r, n, bit;
+    int16_t a, z;
+    memset(b, 0, 96);
+    for (i = 0, bit = 0x10; i < 2; i++, bit >>= 1) {
+        if (dp_hd[i] <= 0) continue;
+        a = dp_tl[i] > 0 ? dp_tl[i] >> 8 : 0;
+        z = dp_hd[i] >> 8;
+        if (z > 39) z = 39;
+        if (a > z) continue;
+        a = a * 21 / 20;              // original rows a..z cover these 42-row ones
+        z = (z + 1) * 21 / 20 - 1;
+        for (; a <= z; a++) b[((up ? 41 - a : a) << 1) + 1] |= bit;
+    }
+    // drop: 6x7 stretched to 7 * h * (1..2) px
+    {   // (1 + pulse) * h, 8.8, in 16 bits (no 32-bit maths: its library would land in bank 0)
+        uint16_t m = (uint16_t)((256 + drip_s64[(dp_ph >> 8) & 63]) >> 1) * (dp_h >> 1) >> 6;
+        m *= 7;
+        n = (uint8_t)((m + m / 20) >> 8);
+    }
+    if (n > 14) n = 14;
+    for (r = 0; r < n; r++)
+        b[((up ? 41 - r : r) << 1) + 1] |= drip_drop[r * 7 / n];
+    vram_dma_vbl(b, (uint8_t *)0x8000u + (DRIP_TILE << 4), 0, 6, _current_bank);
+    for (i = 0; i < 3; i++) spr_put(76, 64 + i * 16, DRIP_TILE + i * 2, SPRPAL_DRIP);
+}
+
 void scene_wining(void) BANKED {
     static const canvas_t txt = {cvbuf, 100, 0, 2, 4, 16, 3, 4, 0};
-    int16_t wint = 200, drip = 0, tail = 0, vlev = -1;
+    int16_t wint = 200, vlev = -1;
     uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, over = 0, turn = 0;
     const char *g1 = 0, *g2 = 0;
     fadeout(1);
@@ -578,14 +680,17 @@ void scene_wining(void) BANKED {
                     savegame();
                     if (scoremode) { winphase = 4; wint = 200; }
                     else if (wining == 0) winphase = 3;
-                    else { wining = 0; winphase = 1; }
+                    else { wining = 0; winphase = 1; drip_start(); }
                 }
             } else if (winphase == 1) {
-                if (drip < 40) drip++;
-                if (wining_txt == 0) winphase = 2;
+                drip_step(1);
+                if (wining_txt == 0) {
+                    winphase = 2;
+                    dp_tl[1] = -(int16_t)((uint16_t)rnd(90) << 8);
+                }
             } else if (winphase == 2) {
-                if (tail < 40) tail += 2;
-                else winphase = 3;
+                drip_step(2);
+                if (dp_tl[0] > (90 << 8) && dp_tl[1] > (90 << 8)) winphase = 3;
             } else if (winphase == 3) {
                 if (blood <= 0) {
                     winphase = 5; wint = 400;
@@ -620,19 +725,7 @@ void scene_wining(void) BANKED {
                     return;
                 }
             }
-            // drip of blood between the number and the vial
-            if (winphase == 1 || winphase == 2) {
-                int16_t top = 64, bot = 106, y;
-                int16_t len = (bot - top) * drip / 40, cut = (bot - top) * tail / 40;
-                for (y = 0; y < len; y += 16) {
-                    int16_t yy = dropup ? bot - y - 16 : top + y;
-                    if (y + 16 > cut) spr_put(76, yy, SPR_DRIP, SPRPAL_DRIP);
-                }
-                if (winphase == 1) {
-                    int16_t yy = dropup ? bot - len - 6 : top + len;
-                    spr_put(76, yy, SPR_DROP, SPRPAL_DROP);
-                }
-            }
+            if (winphase == 1 || winphase == 2) drip_draw(dropup);
             if (BTNP(J_A | J_B | J_START)) {
                 wint = 0;
                 blood_txt = blood;

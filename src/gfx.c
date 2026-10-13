@@ -1423,6 +1423,11 @@ extern volatile uint8_t joy_latch;
 
 uint8_t spr_hold;   // 1: keep last frame's sprites (nothing drawn this frame)
 
+// Sliding dialog box: lines box_ly0..box_ly1-1 show BG map rows 20-23 (box_scy), the rest
+// scrolls normally; the LCD interrupt switches SCY in the HBlank before each change (main.c).
+uint8_t box_on, box_ly0, box_ly1, box_scy;
+uint8_t box_nly0, box_nly1, box_nscy;   // next frame's, taken in VBlank
+
 void frame(void) {
     if (!spr_hold) spr_end();
     vsync();
@@ -1439,6 +1444,13 @@ void frame(void) {
     }
     SCX_REG = scx - cam_x;
     SCY_REG = scy - cam_y;
+    if (box_on) {
+        box_ly0 = box_nly0;
+        box_ly1 = box_nly1;
+        box_scy = box_nscy;
+        if (!box_ly0) SCY_REG = box_scy;
+        LYC_REG = (box_ly0 ? box_ly0 : box_ly1) - 1;
+    }
     {
         uint8_t save = _current_bank;
         SWITCH_ROM(BANK(sound_bank));

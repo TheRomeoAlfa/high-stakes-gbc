@@ -146,6 +146,8 @@ void reset_screen(void) BANKED {
     win_split = 0;
     win_cut = 0;
     WY_REG = 144;
+    box_on = 0;
+    LYC_REG = 111;
     scx = scy = 0;
     cam_x = cam_y = 0;
     clear_bg();
@@ -1139,7 +1141,7 @@ static uint8_t score_phase(void) {
     // returns 1 = next round, 0 = match over
     int16_t wint = 100, wintstep = 60;
     int16_t wy = BAND_LY * 16, wyd;
-    uint8_t nl = 0, i, blink = 0;
+    uint8_t nl = 0, i, blink = 0, pulse = 0;
     const char *btxt = result == 3 ? "pass" : result == 1 ? "round won" : "round lost";
     // window: banner + orange panel; the banner rows fill with the wave first
     map_fill(1, 0, 0, 20, 18, TILE_SOLID(3), 0);
@@ -1165,6 +1167,8 @@ static uint8_t score_phase(void) {
             i = pend_i++;
             cv_line.y = 2 + nl;
             cv_line.tile = 155 + nl * 20;
+            // "continue" uses the card back palette: same orange, plus the plum it pulses from
+            cv_line.pal = pend_kind[i] == 2 ? 2 : 0;
             cv_begin(&cv_line, 3);
             if (pend_kind[i] == 2) {
                 cv_print(pend_lbl[i], 58, 1, 1);
@@ -1178,13 +1182,15 @@ static uint8_t score_phase(void) {
             nl++;
             wint = wintstep;
         }
-        // blink "continue"
+        // "continue" pulses plum -> purple a third of each second (sin(time()) < 0.5)
         if (pend_i == pend_n && nl) {
-            uint8_t b = (frames >> 5) & 1;
+            uint8_t b;
+            if (++pulse >= 60) pulse = 0;
+            b = pulse >= 35 && pulse < 55;
             if (b != blink) {
                 blink = b;
                 cv_begin(&cv_line, 3);
-                if (b) cv_print(pend_lbl[pend_n - 1], 58, 1, 1);
+                cv_print(pend_lbl[pend_n - 1], 58, 1, b ? 2 : 1);
                 cv_draw(&cv_line);
             }
         }
@@ -1198,8 +1204,12 @@ static uint8_t score_phase(void) {
                 stakes = 0;
                 if (round_ >= 5) {
                     if (bonusmode && result == 1) wbin = 1;
-                    while (stakes_txt != stakes || wining_txt != wining) {
+                    // the panel slides down behind the HUD while the counters finish
+                    while (stakes_txt != stakes || wining_txt != wining || wy < (111 << 4)) {
                         update_gtxt();
+                        wy += ((112 << 4) - wy) / 5 + 1;
+                        WY_REG = (uint8_t)(wy >> 4);
+                        win_cut = (uint8_t)(wy >> 4);
                         game_frame();
                     }
                     win_split = 0;
