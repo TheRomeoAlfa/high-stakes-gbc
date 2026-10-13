@@ -444,22 +444,67 @@ static void menu_text(void) {
     cv_draw(&CV_MTXT);
 }
 
+// ---- the opponent cards (update_menu): each drifts on its own, randx / randy =
+// cos((t + i * 0.79) / 2 or 3) * 1.7, and rides an arc, y + cos((x - 64) / 160) * 5.
+// Drawn as 8x8 sprites (menu_spr_tiles in OBJ bank 1, card palettes), behind the bar.
+static const int8_t mcos[64] = {
+    127, 126, 125, 122, 117, 112, 106, 98, 90, 81, 71, 60, 49, 37, 25, 12,
+    0, -12, -25, -37, -49, -60, -71, -81, -90, -98, -106, -112, -117, -122, -125, -126,
+    -127, -126, -125, -122, -117, -112, -106, -98, -90, -81, -71, -60, -49, -37, -25, -12,
+    0, 12, 25, 37, 49, 60, 71, 81, 90, 98, 106, 112, 117, 122, 125, 126
+};
+
+static void menu_cards(int16_t mxp, int16_t d, uint16_t t) {
+    uint8_t n, i, p, k;
+    for (n = 0; n < 4; n++) {   // the selected card first: it wins the per-line sprite limit
+        int16_t left, top, dx;
+        int8_t rx, ry, dip;
+        i = n == 0 ? mnucur : (n <= mnucur ? n - 1 : n);
+        rx = (int8_t)(((int16_t)mcos[(uint8_t)((t * 546u + i * 25887u) >> 10) & 63] * 109) >> 13);
+        ry = (int8_t)(((int16_t)mcos[(uint8_t)((t * 364u + i * 17257u) >> 10) & 63] * 109) >> 13);
+        left = 64 + i * 48 - mxp + rx;
+        dx = left + 10 - 80;
+        if (dx < 0) dx = -dx;
+        k = dx > 150 ? 63 : (uint8_t)(dx * 5 / 12) & 63;   // 160 original px a turn
+        dip = (int8_t)(mcos[k] * 5 / 127) - 5;
+        top = 16 + d + dip + ry;
+        for (p = 0; p < 12; p++) {   // (past 40 sprites, a far card's edge drops for a moment)
+            int16_t x = left + (p % 3) * 8, y = top + (p / 3) * 8;
+            k = i * 12 + p;
+            if (x > -8 && x < 168 && y > -8 && y < 144)
+                spr_put(x, y, k, menu_spr_pal[k] | 0x88);   // OBJ bank 1, behind BG colours 1-3
+        }
+    }
+}
+
+// the arrows beside the selected card: BG (the sprite palettes are the cards'), bobbing
+static const canvas_t CV_MARR = {cvbuf, 140, 0, 5, 3, 10, 2, 0, 0};
+
+static void menu_arrows(int8_t b) {
+    cv_begin(&CV_MARR, 0);
+    if (mnucur > 0) cv_putc('\x02', 52 - b - 40, 6, 2);
+    if (mnucur < 3) cv_putc('\x03', 102 + b - 40, 6, 2);
+    cv_draw(&CV_MARR);
+}
+
 // mnuy: the menu slides up into place from below (from the title or the intro), or down
 // from above after the winnings screen, easing 1/20 a frame; the bar stays
 int16_t menu_from = 69;
 
 void scene_menu(void) BANKED {
-    uint8_t i, redraw = 1;
+    uint8_t redraw = 1;
+    int8_t ab = 99;
+    uint16_t mt = 0;
     int16_t mx, mtarget, my = menu_from << 8, d;
     menu_from = 69;
     reset_screen();
-    card_pals_load();
     set_bgpal(0, 0, 8, 9, 7);
-    copy_objpals(0, 8, obj_pals);
+    copy_objpals(0, 4, card_pals);
+    load_spr_banked(BANK(menu_spr_tiles), menu_spr_tiles, 0, 48, 1);
+    SPRITES_8x8;   // reset_screen() sets 8x16 again
     bar_setup();
     map_fill(1, 0, 0, 20, 5, 0, 5);
     map_fill(0, 0, 12, 32, 20, 0, 0);   // the slide scrolls these rows into view
-    for (i = 0; i < 4; i++) draw_card(8 + i * 6, 2, CF_FACE(10 + i));
     mtarget = (int16_t)mnucur * 48 - 4;
     mx = mtarget * 16;
     WY_REG = 104;
@@ -477,19 +522,14 @@ void scene_menu(void) BANKED {
         }
         if (BTNP(J_LEFT) && mnucur > 0) { mnucur--; sfx(63); redraw = 1; }
         else if (BTNP(J_RIGHT) && mnucur < 3) { mnucur++; sfx(63); redraw = 1; }
-        if (redraw) { menu_text(); redraw = 0; }
+        if (redraw) { menu_text(); redraw = 0; ab = 99; }
         mtarget = (int16_t)mnucur * 48 - 4;
         mx += (mtarget * 16 - mx) / 10;
-        scx = (uint8_t)(mx >> 4);
         my -= my / 20;
         if (my > -128 && my < 128) my = 0;
         d = my >> 8;
         scy = (uint8_t)-d;
-        {   // the text (from line 56 at rest) doesn't follow the carousel
-            int16_t l = 56 + d;
-            scx_split_ly = l < 1 ? 1 : l > 143 ? 143 : (uint8_t)l;
-            scx_split_val = 0;
-        }
+        menu_cards(mx >> 4, d, mt++);
         {
             uint8_t f = (frames >> 3) & 1;
             if (f != mflash) {
@@ -500,8 +540,7 @@ void scene_menu(void) BANKED {
         }
         {
             int8_t b = sintab[(frames >> 2) & 31];
-            if (mnucur > 0) spr_put(52 - b, 30 + d, SPR_MARR_L, SPRPAL_MARR_L);
-            if (mnucur < 3) spr_put(102 + b, 30 + d, SPR_MARR_R, SPRPAL_MARR_R);
+            if (b != ab) { ab = b; menu_arrows(b); }
         }
         if (BTNP(J_A | J_START)) {
             if (unlocked[mnucur] || scoremode) {

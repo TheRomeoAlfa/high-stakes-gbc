@@ -1335,8 +1335,6 @@ uint8_t spr_hold;   // 1: keep last frame's sprites (nothing drawn this frame)
 // scrolls normally; the LCD interrupt switches SCY in the HBlank before each change (main.c).
 uint8_t box_on, box_ly0, box_ly1, box_scy;
 uint8_t box_nly0, box_nly1, box_nscy;   // next frame's, taken in VBlank
-// Opponent menu: from line scx_split_ly on, SCX is scx_split_val (0 = off; main.c)
-uint8_t scx_split_ly, scx_split_val;
 
 void frame(void) {
     if (!fading_out && fadelvl) {
@@ -1356,7 +1354,6 @@ void frame(void) {
     if (!vd_n && vq_n) vq_flush();
     SCX_REG = scx - cam_x;
     SCY_REG = scy - cam_y;
-    if (scx_split_ly) LYC_REG = scx_split_ly - 1;
     if (box_on) {
         box_ly0 = box_nly0;
         box_ly1 = box_nly1;

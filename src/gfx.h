@@ -56,8 +56,7 @@ uint8_t map_vbl_queued(void);   // blocks still waiting for a VBlank   // a bloc
 extern uint8_t spr_hold;
 void fade_hue(const uint16_t *src, uint16_t *dst, uint8_t lvl) BANKED;   // fade.c
 extern uint8_t box_on, box_ly0, box_ly1, box_scy;   // dialog box split (scenes.c dlg_slide)
-extern uint8_t box_nly0, box_nly1, box_nscy;
-extern uint8_t scx_split_ly, scx_split_val;   // menu: SCX from that line on (0 = off)   // frame() keeps the last sprites while set
+extern uint8_t box_nly0, box_nly1, box_nscy;   // frame() keeps the last sprites while set
 void vram_dma_vbl(const void *src, void *dst, uint8_t vbank, uint8_t blocks, uint8_t rombank);   // at next VBlank
 uint8_t vram_dma_busy(void);   // jobs still waiting (a VBlank could not fit them all)
 extern uint8_t lb_bank;            // card hop overlap blend, see lift.c

@@ -45,11 +45,6 @@ static void band_write(const uint8_t *p) {   // in HBlank: palette RAM is locked
 // line it triggered on is already being drawn, and a window switched off mid-line leaves
 // its left part showing.
 static void lcd_isr(void) {
-    if (scx_split_ly) {   // opponent menu: the text below the cards doesn't scroll sideways
-        while (STAT_REG & 3);
-        SCX_REG = scx_split_val;
-        return;
-    }
     if (box_on) {   // dialog box lines: their own scroll (gfx.c box_on)
         uint8_t ly = LY_REG;
         while (STAT_REG & 3);

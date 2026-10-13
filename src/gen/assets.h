@@ -18,6 +18,9 @@ BANKREF_EXTERN(card_tiles)
 extern const uint8_t card_fmap[480];
 extern const uint8_t card_fattr[480];
 extern const uint16_t card_pals[16];
+extern const uint8_t menu_spr_tiles[768];
+BANKREF_EXTERN(menu_spr_tiles)
+extern const uint8_t menu_spr_pal[48];
 extern const uint8_t slot_map[42];
 extern const uint8_t lift_b[3168];
 BANKREF_EXTERN(lift_b)
@@ -91,9 +94,9 @@ extern const uint8_t sep_attr[20];
 extern const uint8_t game_tiles[576];
 BANKREF_EXTERN(game_tiles)
 extern const uint16_t obj_pals[32];
-extern const uint8_t spr_tiles[1632];
+extern const uint8_t spr_tiles[1824];
 BANKREF_EXTERN(spr_tiles)
-#define N_SPR_TILES 102
+#define N_SPR_TILES 114
 #define SPR_HAND 0
 #define SPRPAL_HAND 0
 #define SPRW_HAND 16
@@ -162,31 +165,35 @@ BANKREF_EXTERN(spr_tiles)
 #define SPRPAL_STAKE_HL 6
 #define SPRW_STAKE_HL 16
 #define SPRN_STAKE_HL 8
-#define SPR_PFLOCK 80
+#define SPR_CARDBACK 80
+#define SPRPAL_CARDBACK 4
+#define SPRW_CARDBACK 24
+#define SPRN_CARDBACK 6
+#define SPR_PFLOCK 92
 #define SPRPAL_PFLOCK 5
 #define SPRW_PFLOCK 8
 #define SPRN_PFLOCK 2
-#define SPR_PFLOCKCUT 84
+#define SPR_PFLOCKCUT 96
 #define SPRPAL_PFLOCKCUT 5
 #define SPRW_PFLOCKCUT 8
 #define SPRN_PFLOCKCUT 2
-#define SPR_STABCUR 88
+#define SPR_STABCUR 100
 #define SPRPAL_STABCUR 5
 #define SPRW_STABCUR 16
 #define SPRN_STABCUR 2
-#define SPR_CORNER 92
+#define SPR_CORNER 104
 #define SPRPAL_CORNER 7
 #define SPRW_CORNER 8
-#define SPR_DRIP 94
+#define SPR_DRIP 106
 #define SPRPAL_DRIP 7
 #define SPRW_DRIP 8
-#define SPR_DROP 96
+#define SPR_DROP 108
 #define SPRPAL_DROP 7
 #define SPRW_DROP 8
-#define SPR_MARR_L 98
+#define SPR_MARR_L 110
 #define SPRPAL_MARR_L 7
 #define SPRW_MARR_L 8
-#define SPR_MARR_R 100
+#define SPR_MARR_R 112
 #define SPRPAL_MARR_R 7
 #define SPRW_MARR_R 8
 #define IMG_BASE 217

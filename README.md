@@ -44,8 +44,6 @@ a scanline interrupt on those lines so the board's colours survive inside the ba
 - Text uses PICO-8's 3x5 font, software-rendered into tiles.
 - The rings on the title and winnings screens grow from a fixed centre; the original's
   centre drifts with the logo (and, on the winnings screen, from higher up).
-- When dealt, cards unfold in place instead of flying in from the top of the screen.
-- The opponent cards in the menu scroll together; they don't drift and dip as in the original.
 - The inactive box chip doesn't lift under the cursor (no sprite palette has its colours).
 - Music is an approximation: PICO-8 has four identical channels, the GB has two pulse,
   one wave and one noise channel, so voices are routed and custom instruments mapped.

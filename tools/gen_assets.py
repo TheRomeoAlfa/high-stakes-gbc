@@ -7,6 +7,7 @@ Reads assets/highstakes.p8.png and writes:
   src/gen/assetsb.c     bulk tile data (autobanked)
   build/preview/*.png   previews of converted graphics
 """
+import itertools
 import math
 import os
 import random
@@ -823,6 +824,19 @@ def main():
         blit(prev, img, (i % 10) * 24, (i // 10) * 32)
     wpng('cards.png', prev)
 
+    # ---------------- opponent menu cards as sprites (they drift one by one): the four
+    # vampire faces as 8x8 sprites, each tile with the palette (and pixels) it has on the BG,
+    # black left transparent (the menu is black behind them); OBJ palettes 0-3 = card_pals
+    mtiles, mpal = [], []
+    for v in range(10, 14):
+        img = [[0 if c == T else c for c in r] for r in cell(faces[v])]
+        for tx, ty, t in tiles_of(img):
+            pi = min(range(len(card_pals)), key=lambda i: card_tile_err(t, card_pals[i]))
+            mtiles += enc_tile(map_tile(t, card_pals[pi]))
+            mpal.append(pi)
+    carr('menu_spr_tiles', mtiles, banked=True)
+    carr('menu_spr_pal', mpal)
+
     # ---------------- game static BG tiles (bank 0, base 1): chip slots + sepline
     gpool = Pool(1, 120)
     slot_bg = crop(54, 21, 13, 10, transp=(11,))
@@ -921,6 +935,8 @@ def main():
                 for dx, dy in ((0, 1), (2, 1), (1, 0), (1, 2)):
                     outl[y + dy][x + dx] = 14
     sdef('STAKE_HL', outl, 6, keep_empty=True)
+    # a card back in flight during the deal: 3x2 parts of 8x16, row by row (stake palette)
+    sdef('CARDBACK', cell(card_back()), 4, keep_empty=True)
     sdef('PFLOCK', crop(8, 25, 8, 28, transp=(11,)), 5)
     pfc = crop(8, 25, 8, 28, transp=(11,))
     for y in range(20, 28):

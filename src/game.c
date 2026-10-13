@@ -68,7 +68,7 @@ void reset_screen(void) BANKED {
     win_cut = 0;
     WY_REG = 144;
     box_on = 0;
-    scx_split_ly = 0;
+    SPRITES_8x16;
     LYC_REG = 111;
     scx = scy = 0;
     cam_x = cam_y = 0;
@@ -82,29 +82,19 @@ void reset_screen(void) BANKED {
 #define CCX(i) ((int16_t)CELLX(i) * 8 + 12)
 #define CCY(i) ((int16_t)CELLY(i) * 8 + 15)
 
-typedef struct {
-    uint8_t val, hidden, hint, had1, had3, badstab;
-    uint8_t ani;     // 0 none, 1 flip, 2 deal
-    uint8_t t, fr, delay;
-    uint8_t lift;    // flip drawn as a hop: lift slot + 1 (0 = drawn with plain frames)
-} card_t;
-static card_t cards[9];
+card_t cards[9];
 // cards' height outside flips (the original's c.z / c.zd / c.zbase, 8.8, gravity 0.15): a
 // face-up card bounces when A is pressed on it, a face-down one rests 1 px up under the
 // cursor. Drawn by lift.c's raised frames while it is off the board.
 static int16_t cz[9], czd[9], czb[9];
-static uint8_t vcard, autoflip;
+// dealing (dealround): each card flies in from above the screen to its cell, easing 1/5 a
+// frame, dropping from 10 px up (gravity 0.15); drawn as sprites until it lands.
+// fx / fy 12.4 (the flight spans more than 8.8 holds), fz / fzd 8.8
+int16_t fx[9], fy[9], fz[9], fzd[9];
+uint8_t vcard, autoflip;
 
-typedef struct {
-    uint8_t used, tile, pal, w16, delay, delme;
-    uint8_t rest;          // settled: skip physics until something moves it
-    int16_t x, y, dx, dy;
-    int16_t z, zd, zbase;  // 8.8
-    uint16_t cardmask;
-} chip_t;
-#define MAXCH 24
-static chip_t chips[MAXCH];
-static uint8_t chip_hi;   // slots >= chip_hi are unused (loops stop there)
+chip_t chips[MAXCH];
+uint8_t chip_hi;   // slots >= chip_hi are unused (loops stop there)
 
 uint8_t gs[6];                // gchip state per slot (0 = gone)
 static uint8_t gs_drawn[6];
@@ -113,11 +103,11 @@ static uint8_t gs_drawn[6];
 static int8_t gz[6], gzd[6], gzb[6];
 uint8_t cur, oldcur, showcur, curchip, curchipi, curstab, curshake;
 static int16_t curx, cury;    // 8.8
-static int16_t stabx, stabdx, staby, stabdy;  // 12.4
-static int8_t stabonus;
-static int16_t pflockx, pflocky, pflockdest;
-static uint8_t pflockard;
-static int8_t dangrect;
+int16_t stabx, stabdx, staby, stabdy;  // 12.4
+int8_t stabonus;
+int16_t pflockx, pflocky, pflockdest;
+uint8_t pflockard;
+int8_t dangrect;
 static int16_t drectsani;     // 8.8
 static uint8_t ldrect;
 static uint8_t shake;
@@ -209,7 +199,7 @@ static int16_t passcost(void) {
 
 static uint8_t bonus_shown, pass_shown, cost_shown;
 static int16_t bonus_val;
-static uint8_t bonus_dirty = 1;   // stake bonus only changes when cards flip / a round starts
+uint8_t bonus_dirty = 1;   // stake bonus only changes when cards flip / a round starts
 
 // HUD canvases are redrawn through a queue: at most one per frame (see game_frame),
 // so several HUD changes landing together never push a frame over budget.
@@ -638,73 +628,6 @@ void startmatch(void) BANKED {
     dealround();
 }
 
-void dealround(void) BANKED {
-    uint8_t vals[9], nv = 9, i, k, h, nt;
-    uint8_t targs[9];
-    bonusmode = 0;
-    stabdx = 0;
-    stabdy = 0;
-    stabonus = 7;
-    pflockx = 0;
-    pflocky = pflockdest = -28;
-    pflockard = 255;
-    curchip = 0;
-    curstab = 0;
-    showcur = 0;
-    dangrect = -1;
-    helpi = 0;
-    if (staby != 0) { stabx = -20 * 16; staby = 0; }
-    musiclvl(0);
-    for (i = 0; i < 9; i++) vals[i] = i + 2;
-    for (i = 0; i < 9; i++) {
-        k = rnd(nv);
-        memset(&cards[i], 0, sizeof(card_t));
-        cards[i].val = vals[k];
-        vals[k] = vals[--nv];
-        cards[i].hidden = 1;
-        cards[i].delay = 10 * (i + 1);
-        cards[i].fr = 254;
-        cards[i].ani = 2;
-        if (cards[i].val == 10) vcard = i;
-    }
-    do autoflip = rnd(9); while (cards[autoflip].val == 10);
-    cards[autoflip].hidden = 0;
-    cur = autoflip + 1;
-    for (h = 9; h >= 2; h--) {
-        if (vampval == 13 && h == cards[autoflip].val) continue;  // asshole mode
-        nt = 0;
-        for (i = 0; i < 9; i++)
-            if (cards[i].hidden && cards[i].val >= h && cards[i].hint == 0 && !(vampval == 13 && i == vcard)) targs[nt++] = i;
-        if (nt) cards[targs[rnd(nt)]].hint = h;
-    }
-    if (vampval == 13) cards[vcard].hint = cards[autoflip].val;
-    cards[autoflip].hidden = 1;
-    for (i = 0; i < 6; i++) gs[i] = rnd(2) ? 4 : 2;
-    if (dropboxes) {
-        if (vampval == 13) {
-            uint8_t va = vcard % 3, vb = 3 + vcard / 3;
-            if (rnd(5) < 3) gs[rnd(2) ? va : vb] = 10;
-            else {
-                do k = rnd(6); while (k == va || k == vb);
-                gs[k] = 10;
-            }
-        } else gs[rnd(6)] = 10;
-    }
-    memset(chips, 0, sizeof(chips));
-    chip_hi = 0;
-    result = 0;
-    stakes = 0;
-    round_++;
-    bonus_dirty = 1;
-}
-
-void bonusround(void) BANKED {
-    dealround();
-    bonusmode = 1;
-    stakes = wining;
-    stabdx = -30 * 16;
-}
-
 // ------------------------------------------------------------------ input
 static void returnchip(void) {
     gs[curchipi] = curchip;
@@ -842,6 +765,20 @@ static void draw_sprites(void) {
         uint8_t t = held_tile[gs[i]];
         if (t && (!gs_drawn[i] || map_vbl_pending(slot_tx[i], slot_ty[i])))
             spr_put16(slot_tx[i] * 8 + 5, slot_ty[i] * 8 + 3 - ((gz[i] + 15) >> 4), t, held_pal[gs[i]]);
+    }
+    {   // cards flying in (dealing)
+        uint8_t k;
+        int16_t x, y;
+        for (k = 0; k < 9; k++) {
+            if (cards[k].ani != 2 || !cards[k].t) continue;
+            x = fx[k] >> 4;
+            y = (fy[k] >> 4) - (fz[k] >> 8);
+            for (i = 0; i < 6; i++) {
+                int16_t py = y + (i / 3) * 16, px = x + (i % 3) * 8;
+                if (py > -16 && px > -8 && px < 168)
+                    spr_put(px, py, SPR_CARDBACK + i * 2, SPRPAL_CARDBACK);
+            }
+        }
     }
     {   // stake bonus box: centred 4 px right of the stake (bonx = 17 - bonw / 2 + stabx)
         int16_t bx = 4 + (stabx >> 4);
@@ -1080,13 +1017,21 @@ static uint8_t do_cards(void) {
             canact = 0;
             continue;
         }
-        if (c->ani == 2) {  // dealing: unfold the card back
-            static const uint8_t dealfr[4] = {CF_EDGE, CF_BACK + 2, CF_BACK + 1, CF_BACK};
-            set_card_fr(i, dealfr[c->t >> 1]);
-            if (c->t == 0) sfx(58);
-            c->t++;
+        if (c->ani == 2) {  // dealing: flying in
+            int16_t tx = (int16_t)(CELLX(i) * 8) << 4, ty = (int16_t)(CELLY(i) * 8) << 4, d;
+            if (!c->t) {
+                c->t = 1;
+                sfx(58);
+            }
+            d = tx - fx[i];
+            fx[i] = d > -5 && d < 5 ? tx : fx[i] + d / 5;   // within 0.3 px: there
+            d = ty - fy[i];
+            fy[i] = d > -5 && d < 5 ? ty : fy[i] + d / 5;
+            fz[i] += fzd[i];
+            fzd[i] -= 38;
+            if (fz[i] <= 0) fz[i] = fzd[i] = 0;
             canact = 0;
-            if (c->t >= 8) {
+            if (fx[i] == tx && fy[i] == ty) {   // landed: on the board
                 c->ani = 0;
                 set_card_fr(i, c->hidden ? CF_BACK : CF_FACE(face_of(i)));
             }
