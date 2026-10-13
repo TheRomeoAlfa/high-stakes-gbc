@@ -828,7 +828,8 @@ static void draw_sprites(void) {
         // + stabx). Before the cards flying in: on its lines (10-25) at most two of them fly at
         // once, 6 sprites, so it keeps its 4 of the 10 a line holds.
         int16_t bx = 4 + (stabx >> 4);
-        if ((stabx || (bonus_want & 2)) && bx > -32 && bonus_rend[0] != -32768)
+        // (gone with the stake once it is out, -30: the original's box is off screen there)
+        if ((stabx || (bonus_want & 2)) && stabx > -30 * 16 && bonus_rend[0] != -32768)
             for (i = 0; i < 4; i++)
                 spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
     }
