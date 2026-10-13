@@ -1142,10 +1142,13 @@ static uint8_t do_cards(void) {
     return noani | (canact << 1);
 }
 
+static uint8_t wait_t;   // frames into the wait after a round
+
 static void wait_board(uint8_t n) {
     while (n--) {
         dochips();
         game_frame();
+        score_prep(wait_t++);   // the score banner's wave is set up meanwhile
     }
 }
 
@@ -1215,6 +1218,7 @@ void scene_game(void) BANKED {
             helpi = 0;
             help_update();
             if (noani && pflockdest == pflocky) {
+                wait_t = 0;
                 wait_board(20);
                 if (result == 1) sfx(41);
                 wait_board(50);

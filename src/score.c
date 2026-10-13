@@ -10,17 +10,44 @@
 static const canvas_t CV_BANNER = {cvbuf, 115, 0, 0, 0, 20, 2, 0, 1};
 static canvas_t cv_line = {cvbuf, 155, 0, 0, 2, 20, 1, 0, 1};
 
+static void banner_draw(uint8_t *buf) {
+    canvas_t c = CV_BANNER;
+    c.buf = buf;
+    cv_begin(&c, 2);
+    cv_bignumc(result == 3 ? "pass" : result == 1 ? "round won" : "round lost", 80, 3, 0, 0);
+}
+
+// The score window's setup, a little a frame in the wait after a round (game.c wait_board,
+// t its frame, 0-69), as it all at once stopped the game for 13 frames: the banner drawn in
+// WVB (the help box has left dlgbuf), its wave's title mask and colours, the window filled
+// and the banner's tiles sent once the help box has slid away, and the board under the band
+// last, a tile a frame, once its cards have settled. score_phase does what is left.
+static uint8_t score_ready;
+
+void score_prep(uint8_t t) BANKED {
+    if (t == 6) banner_draw(WVB);
+    else if (t >= 7 && t < 12) wave_prep_title(WVB, (t - 7) * 4, 4);
+    else if (t >= 12 && t < 16) wave_prep_lut((t - 12) * 8, 8);
+    else if (t >= 20 && t < 26) map_fill(1, 0, (t - 20) * 3, 20, 3, TILE_SOLID(3), 0);
+    else if (t == 26) {   // tiles 115-154: 115-127 at 0x9730, 128-154 at 0x8800
+        vram_dma_vbl(WVB, (uint8_t *)0x9000u + (115 << 4), 0, 13, _current_bank);
+        vram_dma_vbl(WVB + 13 * 16, (uint8_t *)0x8800u, 0, 27, _current_bank);
+        score_ready = 1;
+    } else if (t >= 28 && t < 68) wave_prep_board(t - 28, 1);
+}
+
 uint8_t score_phase(void) BANKED {
     // returns 1 = next round, 0 = match over
     int16_t wint = 100, wintstep = 60;
     int16_t wy = BAND_LY * 16, wyd;
     uint8_t nl = 0, i, blink = 0, pulse = 0;
-    const char *btxt = result == 3 ? "pass" : result == 1 ? "round won" : "round lost";
     // window: banner + orange panel; the banner rows fill with the wave first
-    map_fill(1, 0, 0, 20, 18, TILE_SOLID(3), 0);
-    cv_begin(&CV_BANNER, 2);
-    cv_bignumc(btxt, 80, 3, 0, 0);
-    cv_flush(&CV_BANNER);   // shown once the wave is done
+    if (!score_ready) {   // (score_prep's)
+        map_fill(1, 0, 0, 20, 18, TILE_SOLID(3), 0);
+        banner_draw(cvbuf);
+        cv_flush(&CV_BANNER);   // shown once the wave is done
+    }
+    score_ready = 0;
     wave_begin();           // the loop's wave_frame lands with the window coming on
     win_split = 1;
     win_show = 1;

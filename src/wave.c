@@ -246,62 +246,92 @@ static uint8_t wv_vread(const uint8_t *p) {
     return v;
 }
 
+static const uint16_t wv_sq[32] = {   // (no multiplies: 384 of them cost frames)
+    0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225,
+    256, 289, 324, 361, 400, 441, 484, 529, 576, 625, 676, 729, 784, 841, 900, 961
+};
+static uint8_t wv_ad(uint8_t a, uint8_t b) { return a > b ? a - b : b - a; }
 static uint16_t wv_dist(uint16_t a, uint16_t b) {
-    int8_t d;
-    uint16_t s;
-    d = (int8_t)(a & 31) - (int8_t)(b & 31);
-    s = (int16_t)d * d;
-    d = (int8_t)((a >> 5) & 31) - (int8_t)((b >> 5) & 31);
-    s += (int16_t)d * d;
-    d = (int8_t)((a >> 10) & 31) - (int8_t)((b >> 10) & 31);
-    return s + (int16_t)d * d;
+    return wv_sq[wv_ad(a & 31, b & 31)] + wv_sq[wv_ad((a >> 5) & 31, (b >> 5) & 31)] +
+           wv_sq[wv_ad((a >> 10) & 31, (b >> 10) & 31)];
 }
 
-void wave_begin(void) BANKED {
+// The wave's setup takes frames, so it is done in the wait after a round, a little a frame
+// (score.c score_prep): the title's mask (from the banner drawn in WVB), the band colours,
+// then the board under the band once its cards have settled. wave_begin does what is left.
+#define WV_LUT ((uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 1600)   // past the composites
+static uint8_t wv_cols_done, wv_lut_done, wv_board_done;
+
+static void wv_bufs(void) {
     uint8_t *a = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 768;   // past the banner canvas
-    uint16_t bc[4];
-    uint8_t lut[32], i, k, j, r, c, at, lo, hi, m0, m1, m2, m3, nl, nh;
-    const uint8_t *src;
-    uint8_t *d;
     wv_comp = a;
     wv_ids = a + 640;
     wv_attrs = a + 704;
-    wv_board = dlgbuf;         // the help box is drawn again after the score (help_drawn = 0)
-    wv_txt = dlgbuf + 640;
-    // title mask from the banner canvas (red = 2, title = 0): [col * 32 + 16 + row], with 16
-    // clear rows above each column for the slide
-    memset(wv_txt, 0, 640);
-    for (c = 0; c < 20; c++) {
-        wv_tlo[c] = 255;
-        for (r = 0; r < 16; r++) {
-            src = cvbuf + (((r >> 3) * 20 + c) << 4) + ((r & 7) << 1);
-            if (wv_txt[c * 32 + 16 + r] = ~(src[0] | src[1])) {
-                if (wv_tlo[c] == 255) wv_tlo[c] = r;
-                wv_thi[c] = r;
+    wv_board = WVB;            // the help box is drawn again after the score (help_drawn = 0)
+    wv_txt = WVB + 640;
+}
+
+// title mask from the banner canvas at src (red = 2, title = 0): [col * 32 + 16 + row], with
+// 16 clear rows above each column for the slide; columns c0..c0 + n - 1
+void wave_prep_title(const uint8_t *src, uint8_t c0, uint8_t n) BANKED {
+    uint8_t r, c;
+    uint8_t *d;
+    wv_bufs();
+    src += (uint16_t)c0 << 4;
+    for (c = c0, d = wv_txt + ((uint16_t)c0 << 5); c < c0 + n; c++, src += 16) {
+        const uint8_t *p = src;
+        uint8_t lo_r = 255, hi_r = 0, v;
+        memset(d, 0, 16);
+        d += 16;
+        for (r = 0; r < 16; r++, p += 2) {
+            if (r == 8) p = src + 20 * 16;
+            v = ~(p[0] | p[1]);
+            *d++ = v;
+            if (v) {
+                if (lo_r == 255) lo_r = r;
+                hi_r = r;
             }
         }
+        wv_tlo[c] = lo_r;
+        wv_thi[c] = hi_r;
     }
-    // band colours: black, gray, red, purple; palette 0 keeps black and red
+    wv_cols_done = c0 + n;
+}
+
+// band colours: black, gray, red, purple (palette 0 keeps black and red); the nearest band
+// colour for BG palette entries i0..i0 + n - 1
+void wave_prep_lut(uint8_t i0, uint8_t n) BANKED {
+    uint16_t bc[4];
+    uint8_t i, k;
     bc[0] = bgpal[0];
     bc[1] = bgpal[4 + 3];
     bc[2] = bgpal[2];
     bc[3] = bgpal[4 + 2];
-    for (i = 0; i < 3; i++) {
-        band_pal[i * 2] = (uint8_t)bc[i + 1];
-        band_pal[i * 2 + 1] = bc[i + 1] >> 8;
-        band_rest[i * 2] = (uint8_t)bgpal[i + 1];
-        band_rest[i * 2 + 1] = bgpal[i + 1] >> 8;
-    }
-    for (i = 0; i < 32; i++) {   // nearest band colour for every BG palette entry
+    if (!i0)
+        for (i = 0; i < 3; i++) {
+            band_pal[i * 2] = (uint8_t)bc[i + 1];
+            band_pal[i * 2 + 1] = bc[i + 1] >> 8;
+            band_rest[i * 2] = (uint8_t)bgpal[i + 1];
+            band_rest[i * 2 + 1] = bgpal[i + 1] >> 8;
+        }
+    for (i = i0; i < i0 + n; i++) {
         uint16_t best = 0xFFFF, dd;
         for (k = 0; k < 4; k++) {
             dd = wv_dist(bgpal[i], bc[k]);
-            if (dd < best) { best = dd; lut[i] = k; }
+            if (dd < best) { best = dd; WV_LUT[i] = k; }
         }
     }
+    wv_lut_done = i0 + n;
+}
+
+void wave_prep_board(uint8_t i0, uint8_t n) BANKED {
+    uint8_t tile[16], ml[4], mh[4], i, k, j, r, at, lo, hi, m0, m1, m2, m3;
+    const uint8_t *src;
+    uint8_t *d;
+    wv_bufs();
     // the board under the band: map entries, and its pixels in band colours
-    for (i = 0; i < 40; i++) {
-        uint16_t mo = 0x9800u + ((uint16_t)(BAND_LY / 8 + i / 20) << 5) + i % 20;
+    for (i = i0; i < i0 + n; i++) {
+        uint16_t mo = 0x9800u + ((uint16_t)(BAND_LY / 8 + (i >= 20)) << 5) + (i >= 20 ? i - 20 : i);
         VBK_REG = 0;
         wv_bid[i] = k = wv_vread((uint8_t *)mo);
         VBK_REG = 1;
@@ -309,34 +339,41 @@ void wave_begin(void) BANKED {
         VBK_REG = (at >> 3) & 1;
         src = (const uint8_t *)((k < 128 ? 0x9000u : 0x8000u) + ((uint16_t)k << 4));
         d = wv_board + (i << 4);
-        for (r = 0; r < 8; r++) {
-            const uint8_t *s = src + (((at & 0x40) ? 7 - r : r) << 1);
-            lo = wv_vread(s);
-            hi = wv_vread(s + 1);
-            if (at & 0x20) {   // x flip
-                uint8_t fl = 0, fh = 0;
-                for (j = 0; j < 8; j++) {
-                    fl = (fl << 1) | (lo & 1); lo >>= 1;
-                    fh = (fh << 1) | (hi & 1); hi >>= 1;
+        vram_copy(tile, src, 16);   // (4 bytes a wait for VRAM, not 1)
+        j = (at & 7) << 2;          // the tile's palette: each colour's band colour, as bit masks
+        for (r = 0; r < 4; r++) {
+            ml[r] = WV_LUT[j + r] & 1 ? 0xFF : 0;
+            mh[r] = WV_LUT[j + r] & 2 ? 0xFF : 0;
+        }
+        {
+            const uint8_t *s = tile;
+            int8_t step = 2;
+            uint8_t a0 = ml[0], a1 = ml[1], a2 = ml[2], a3 = ml[3], b0 = mh[0], b1 = mh[1], b2 = mh[2], b3 = mh[3];
+            if (at & 0x40) { s = tile + 14; step = -2; }   // y flip
+            for (r = 0; r < 8; r++, s += step) {
+                lo = s[0];
+                hi = s[1];
+                if (at & 0x20) {   // x flip
+                    lo = (lo >> 4) | (lo << 4); lo = ((lo & 0xCC) >> 2) | ((lo & 0x33) << 2); lo = ((lo & 0xAA) >> 1) | ((lo & 0x55) << 1);
+                    hi = (hi >> 4) | (hi << 4); hi = ((hi & 0xCC) >> 2) | ((hi & 0x33) << 2); hi = ((hi & 0xAA) >> 1) | ((hi & 0x55) << 1);
                 }
-                lo = fl;
-                hi = fh;
+                m0 = ~(lo | hi); m1 = lo & ~hi; m2 = hi & ~lo; m3 = lo & hi;
+                *d++ = (m0 & a0) | (m1 & a1) | (m2 & a2) | (m3 & a3);
+                *d++ = (m0 & b0) | (m1 & b1) | (m2 & b2) | (m3 & b3);
             }
-            m0 = ~lo & ~hi; m1 = lo & ~hi; m2 = ~lo & hi; m3 = lo & hi;
-            j = (at & 7) << 2;
-            nl = nh = 0;
-            if (lut[j] & 1) nl |= m0;
-            if (lut[j] & 2) nh |= m0;
-            if (lut[j + 1] & 1) nl |= m1;
-            if (lut[j + 1] & 2) nh |= m1;
-            if (lut[j + 2] & 1) nl |= m2;
-            if (lut[j + 2] & 2) nh |= m2;
-            if (lut[j + 3] & 1) nl |= m3;
-            if (lut[j + 3] & 2) nh |= m3;
-            *d++ = nl;
-            *d++ = nh;
         }
     }
+    VBK_REG = 0;
+    wv_board_done = i0 + n;
+}
+
+// whatever the wait left undone (the banner in cvbuf if its mask is)
+void wave_begin(void) BANKED {
+    if (wv_cols_done < 20) wave_prep_title(cvbuf, wv_cols_done, 20 - wv_cols_done);
+    if (wv_lut_done < 32) wave_prep_lut(wv_lut_done, 32 - wv_lut_done);
+    if (wv_board_done < 40) wave_prep_board(wv_board_done, 40 - wv_board_done);
+    wv_cols_done = wv_lut_done = wv_board_done = 0;
+    wv_bufs();
     VBK_REG = 0;
     memset(wv_ids, 0, 128);
     memset(wv_kp, 0, sizeof(wv_kp));
