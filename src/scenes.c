@@ -191,7 +191,10 @@ static const char *chaintxt(void) {
 void scene_start(void) BANKED {
     static const canvas_t bar = {cvbuf, 100, 0, 0, 13, 20, 5, 4, 0};
     static const canvas_t cvs = {cvbuf, 200, 0, 5, 12, 10, 1, 5, 0};
-    uint8_t stcur = 0, redraw = 1, flash = 0, abob = 0;
+    // the options sit 50 px apart on a strip that slides (stmnux, /5 a frame) in a clip
+    static const canvas_t opt = {cvbuf, 210, 0, 7, 15, 6, 2, 4, 0};   // 48 px, as the original's
+    uint8_t stcur = 0, redraw = 1, flash = 0, abob = 0, i;
+    int16_t sx = 0, sxd = 255;
     uint16_t bx = 0, by = 0;
     nst = 0;
     if (blood > 0 && blood < 5000) stmnu[nst++] = "continue";
@@ -214,7 +217,6 @@ void scene_start(void) BANKED {
         if (redraw) {
             cv_begin(&bar, 0);
             cv_bignumc("high stakes", 80, 4, 1, 0);
-            cv_cprint(stmnu[stcur], 80, 22, 2);
 #ifdef DEBUG_FPS
             s_begin(); s_num((int16_t)(dbg_loops & 0x7FFF)); s_str("/"); s_num((int16_t)(sys_time & 0x7FFF));
             cv_print(s_end(), 2, 33, 1);
@@ -223,6 +225,14 @@ void scene_start(void) BANKED {
 #endif
             cv_draw(&bar);
             redraw = 0;
+            sxd = 255;
+        }
+        sx += (stcur * 50 * 16 - sx) / 5;
+        if ((sx >> 4) != sxd) {
+            sxd = sx >> 4;
+            cv_begin(&opt, 0);
+            for (i = 0; i < nst; i++) cv_cprint(stmnu[i], 24 + i * 50 - sxd, 6, 2);
+            cv_draw(&opt);
         }
         rings_update();
 #ifdef DEBUG_FPS
@@ -248,8 +258,8 @@ void scene_start(void) BANKED {
         bx += 46;
         by += 34;
         draw_logo(80 + sintab[(bx >> 8) & 31], 50 + sintab[(by >> 8) & 31]);
-        if (BTNP(J_LEFT) && stcur > 0) { stcur--; sfx(63); redraw = 1; }
-        else if (BTNP(J_RIGHT) && stcur < nst - 1) { stcur++; sfx(63); redraw = 1; }
+        if (BTNP(J_LEFT) && stcur > 0) { stcur--; sfx(63); }
+        else if (BTNP(J_RIGHT) && stcur < nst - 1) { stcur++; sfx(63); }
         if (BTNP(J_A | J_START)) {
             sfx(53);
             blood_txt = blood;
@@ -370,9 +380,10 @@ static void draw_vial(const canvas_t *cv, int16_t ox, int16_t oy, int16_t bl) {
         }
 }
 
-static const canvas_t CV_MTXT = {cvbuf, 1, 0, 0, 0, 20, 4, 0, 1};
-static const canvas_t CV_VIAL = {cvbuf, 81, 0, 8, 5, 4, 3, 5, 1};
-static const canvas_t CV_BAR2 = {cvbuf, 93, 0, 0, 8, 20, 2, 5, 1};
+// menu: text in BG rows 8-11 (moves with the cards), the bar in the window from line 104
+static const canvas_t CV_MTXT = {cvbuf, 1, 0, 0, 8, 20, 4, 0, 0};
+static const canvas_t CV_VIAL = {cvbuf, 81, 0, 8, 0, 4, 3, 5, 1};
+static const canvas_t CV_BAR2 = {cvbuf, 93, 0, 0, 3, 20, 2, 5, 1};
 
 static void bar_draw(uint8_t show_streak) {
     cv_begin(&CV_VIAL, 0);
@@ -433,19 +444,25 @@ static void menu_text(void) {
     cv_draw(&CV_MTXT);
 }
 
+// mnuy: the menu slides up into place from below (from the title or the intro), or down
+// from above after the winnings screen, easing 1/20 a frame; the bar stays
+int16_t menu_from = 69;
+
 void scene_menu(void) BANKED {
     uint8_t i, redraw = 1;
-    int16_t mx, mtarget;
+    int16_t mx, mtarget, my = menu_from << 8, d;
+    menu_from = 69;
     reset_screen();
     card_pals_load();
     set_bgpal(0, 0, 8, 9, 7);
     copy_objpals(0, 8, obj_pals);
     bar_setup();
+    map_fill(1, 0, 0, 20, 5, 0, 5);
+    map_fill(0, 0, 12, 32, 20, 0, 0);   // the slide scrolls these rows into view
     for (i = 0; i < 4; i++) draw_card(8 + i * 6, 2, CF_FACE(10 + i));
-    map_fill(1, 0, 0, 20, 5, 0, 0);
     mtarget = (int16_t)mnucur * 48 - 4;
     mx = mtarget * 16;
-    WY_REG = 64;
+    WY_REG = 104;
     win_show = 1;
     blood_txt = blood;
     bar_draw(!scoremode);
@@ -464,6 +481,15 @@ void scene_menu(void) BANKED {
         mtarget = (int16_t)mnucur * 48 - 4;
         mx += (mtarget * 16 - mx) / 10;
         scx = (uint8_t)(mx >> 4);
+        my -= my / 20;
+        if (my > -128 && my < 128) my = 0;
+        d = my >> 8;
+        scy = (uint8_t)-d;
+        {   // the text (from line 56 at rest) doesn't follow the carousel
+            int16_t l = 56 + d;
+            scx_split_ly = l < 1 ? 1 : l > 143 ? 143 : (uint8_t)l;
+            scx_split_val = 0;
+        }
         {
             uint8_t f = (frames >> 3) & 1;
             if (f != mflash) {
@@ -474,8 +500,8 @@ void scene_menu(void) BANKED {
         }
         {
             int8_t b = sintab[(frames >> 2) & 31];
-            if (mnucur > 0) spr_put(52 - b, 30, SPR_MARR_L, SPRPAL_MARR_L);
-            if (mnucur < 3) spr_put(102 + b, 30, SPR_MARR_R, SPRPAL_MARR_R);
+            if (mnucur > 0) spr_put(52 - b, 30 + d, SPR_MARR_L, SPRPAL_MARR_L);
+            if (mnucur < 3) spr_put(102 + b, 30 + d, SPR_MARR_R, SPRPAL_MARR_R);
         }
         if (BTNP(J_A | J_START)) {
             if (unlocked[mnucur] || scoremode) {
@@ -633,7 +659,10 @@ static void drip_draw(uint8_t up) {
 void scene_wining(void) BANKED {
     static const canvas_t txt = {cvbuf, 100, 0, 2, 4, 16, 3, 4, 0};
     int16_t wint = 200, vlev = -1;
-    uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, over = 0, turn = 0;
+    uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, over = 0, turn = 0, dyw = 255, dyg = 255, n;
+    // wintxth / govertxth: each text rises 18 px into its clip (/10 a frame) and sinks out
+    // again; 24 px canvas here. 8.8, 18 * 256 = fully up.
+    uint16_t wth = 0, gth = 0, wtd = 18 * 256, gtd = 0;
     const char *g1 = 0, *g2 = 0;
     fadeout(1);
     music(-1);
@@ -664,15 +693,22 @@ void scene_wining(void) BANKED {
             if (gtxt_changed & 2) redraw = 1;
             if (gtxt_changed & 4) rbar = 1;
             gtxt_changed = 0;
+            wth += ((int16_t)(wtd - wth)) / 10;
+            gth += ((int16_t)(gtd - gth)) / 10;
+            n = (uint8_t)((uint16_t)(18 * 256 - wth) * 4 / 768);   // 24 px at 0, 0 at 18 px
+            if (n != dyw) { dyw = n; redraw = 1; }
+            n = (uint8_t)((uint16_t)(18 * 256 - gth) * 4 / 768);
+            if (n != dyg) { dyg = n; redraw = 1; }
             if (redraw && rbar) turn ^= 1;
             if (redraw && (!rbar || turn)) {
                 cv_begin(&txt, 0);
-                if (over) {
-                    cv_cprint(g2, 64, 2, 1);
-                    cv_bignumc(g1, 64, 9, 2, 0);
-                } else {
-                    cv_cprint(losses_desc ? "losses" : "winnings", 64, 2, 1);
-                    cv_bignumc(numstr(wining_txt), 64, 9, 2, 1);
+                if (dyw < 24) {
+                    cv_cprint(losses_desc ? "losses" : "winnings", 64, 2 + dyw, 1);
+                    cv_bignumc(numstr(wining_txt), 64, 9 + dyw, 2, 1);
+                }
+                if (over && dyg < 24) {
+                    cv_cprint(g2, 64, 2 + dyg, 1);
+                    cv_bignumc(g1, 64, 9 + dyg, 2, 0);
                 }
                 {   // sepline: purple line, dotted ends ("aa2a2a", plum shown black)
                     static const uint8_t cap[6] = {0, 0, 3, 0, 3, 0};
@@ -735,15 +771,17 @@ void scene_wining(void) BANKED {
                     winphase = 4; wint = 200;
                 }
             } else if (winphase == 4) {
-                if (wint <= 0) {
+                if (wint <= 0) wtd = 0;   // the text sinks, then the menu comes down
+                if (!wtd && wth < 128) {
                     fadeout(1);
                     music(0);
+                    menu_from = -91;
                     scene = SC_MENU;
                     ticksfx = 0;
                     return;
                 }
             } else if (winphase == 5) {
-                if (!over) { over = 1; redraw = 1; wint = 120; }
+                if (!over) { over = 1; redraw = 1; wint = 120; wtd = 0; gtd = 18 * 256; }
                 if (wint <= 0) {
                     savegame();
                     fadeout(1);
@@ -760,6 +798,8 @@ void scene_wining(void) BANKED {
                 wining_txt = wining;
                 gtxt_changed = 6;
                 rbar = 1;
+                wth = wtd;
+                gth = gtd;
                 if (winphase == 1 || winphase == 2) { winphase = 3; }
             }
             frame();

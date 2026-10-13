@@ -68,6 +68,7 @@ void reset_screen(void) BANKED {
     win_cut = 0;
     WY_REG = 144;
     box_on = 0;
+    scx_split_ly = 0;
     LYC_REG = 111;
     scx = scy = 0;
     cam_x = cam_y = 0;

@@ -1192,112 +1192,13 @@ void copy_objpals(uint8_t first, uint8_t n, const uint16_t *src) {
 }
 
 static uint16_t tmppal[32];
-static const uint8_t *scale;
 
-// fade_tab[k][c] = c * k^2 / 625 (quadratic falloff, close to PICO-8's fade table),
-// precomputed; fade_conv scales 32 RGB555 colours from vc_src into vc_dst.
-static uint8_t *fd_out;
-static uint8_t fd_cnt, fd_r, fd_g;
+static uint16_t tmpobj[32];
 
-static void asm_fade(void) __naked {
-    __asm
-    ld  hl, #_vc_src
-    ld  a, (hl+)
-    ld  e, a
-    ld  d, (hl)
-    ld  hl, #_vc_dst
-    ld  a, (hl+)
-    ld  (_fd_out), a
-    ld  a, (hl)
-    ld  (_fd_out + 1), a
-    ld  a, #32
-    ld  (_fd_cnt), a
-1$:
-    ld  a, (de)
-    inc de
-    ld  b, a
-    ld  a, (de)
-    inc de
-    ld  c, a
-    push de
-    ld  a, b
-    and a, #31
-    call 10$
-    ld  (_fd_r), a
-    ld  a, c
-    and a, #3
-    add a, a
-    add a, a
-    add a, a
-    ld  d, a
-    ld  a, b
-    swap a
-    rrca
-    and a, #7
-    or  a, d
-    call 10$
-    ld  (_fd_g), a
-    ld  a, c
-    rrca
-    rrca
-    and a, #31
-    call 10$
-    add a, a
-    add a, a
-    ld  e, a
-    ld  a, (_fd_g)
-    rrca
-    rrca
-    rrca
-    and a, #3
-    or  a, e
-    ld  e, a
-    ld  a, (_fd_g)
-    swap a
-    add a, a
-    and a, #0xE0
-    ld  d, a
-    ld  a, (_fd_r)
-    or  a, d
-    ld  d, a
-    ld  hl, #_fd_out
-    ld  a, (hl+)
-    ld  h, (hl)
-    ld  l, a
-    ld  (hl), d
-    inc hl
-    ld  (hl), e
-    inc hl
-    ld  a, l
-    ld  (_fd_out), a
-    ld  a, h
-    ld  (_fd_out + 1), a
-    pop de
-    ld  hl, #_fd_cnt
-    dec (hl)
-    jr  nz, 1$
-    ret
-10$:
-    push af
-    ld  hl, #_scale
-    ld  a, (hl+)
-    ld  h, (hl)
-    ld  l, a
-    pop af
-    add a, l
-    ld  l, a
-    ld  a, h
-    adc a, #0
-    ld  h, a
-    ld  a, (hl)
-    ret
-    __endasm;
-}
-
-static void fade_conv(const uint16_t *src) {
-    vc_src = (const uint8_t *)src;
-    vc_dst = (uint8_t *)tmppal;
-    asm_fade();
+// the faded palettes, worked out before VBlank (pal_apply then only writes them)
+static void pal_prepare(void) {
+    fade_hue(bgpal, tmppal, fadelvl);
+    fade_hue(objpal, tmpobj, fadelvl);
 }
 
 static void pal_apply(void) {
@@ -1305,11 +1206,8 @@ static void pal_apply(void) {
         set_bkg_palette(0, 8, bgpal);
         set_sprite_palette(0, 8, objpal);
     } else {
-        scale = fade_tab + (uint8_t)(25 - fadelvl) * 32;
-        fade_conv(bgpal);
         set_bkg_palette(0, 8, tmppal);
-        fade_conv(objpal);
-        set_sprite_palette(0, 8, tmppal);
+        set_sprite_palette(0, 8, tmpobj);
     }
 }
 
@@ -1437,23 +1335,28 @@ uint8_t spr_hold;   // 1: keep last frame's sprites (nothing drawn this frame)
 // scrolls normally; the LCD interrupt switches SCY in the HBlank before each change (main.c).
 uint8_t box_on, box_ly0, box_ly1, box_scy;
 uint8_t box_nly0, box_nly1, box_nscy;   // next frame's, taken in VBlank
+// Opponent menu: from line scx_split_ly on, SCX is scx_split_val (0 = off; main.c)
+uint8_t scx_split_ly, scx_split_val;
 
 void frame(void) {
-    if (!spr_hold) spr_end();
-    vsync();
-    // VBlank work: DMA first (it must finish before the screen starts), then map blocks
-    if (vd_n) vd_flush();
-    if (!vd_n && vq_n) vq_flush();
     if (!fading_out && fadelvl) {
         fadelvl--;
         pal_dirty = 1;
     }
+    if (pal_dirty && fadelvl) pal_prepare();
+    if (!spr_hold) spr_end();
+    vsync();
+    // VBlank work: DMA first (it must finish before the screen starts), the palettes, then
+    // map blocks
+    if (vd_n) vd_flush();
     if (pal_dirty) {
         pal_apply();
         pal_dirty = 0;
     }
+    if (!vd_n && vq_n) vq_flush();
     SCX_REG = scx - cam_x;
     SCY_REG = scy - cam_y;
+    if (scx_split_ly) LYC_REG = scx_split_ly - 1;
     if (box_on) {
         box_ly0 = box_nly0;
         box_ly1 = box_nly1;
@@ -1500,6 +1403,7 @@ void screen_off(void) {
     // instead black out all palettes while the screen is rebuilt
     fadelvl = 25;
     fading_out = 1;
+    pal_prepare();
     spr_end();
     vsync();
     pal_apply();
