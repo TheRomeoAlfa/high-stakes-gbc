@@ -45,7 +45,9 @@ extern const uint8_t lift_f12[2880];
 BANKREF_EXTERN(lift_f12)
 extern const uint8_t lift_f13[2880];
 BANKREF_EXTERN(lift_f13)
-extern const uint8_t lift_shadow[4368];
+extern const uint8_t lift_z[10656];
+BANKREF_EXTERN(lift_z)
+extern const uint8_t lift_shadow[4992];
 BANKREF_EXTERN(lift_shadow)
 #define LIFT_REC 288
 #define LIFT_SHREC 208

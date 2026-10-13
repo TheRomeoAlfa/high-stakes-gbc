@@ -635,17 +635,30 @@ void cv_flush_tile(const canvas_t *c, uint16_t i) {
 static uint8_t rowbuf[32];
 
 // map/attribute placement is cached per first tile, so redraws only upload pixels
-static uint16_t placed[256];
-static uint8_t placed_gen[256], cur_gen = 1;
+// (a few canvases are live at a time: 16 entries, oldest replaced)
+#define PLACED_N 16
+static uint8_t placed_t[PLACED_N], placed_n, placed_next;
+static uint16_t placed_k[PLACED_N];
 
 static void place_attrs(const canvas_t *c);
 
 void cv_place(const canvas_t *c) {
     uint8_t r, i, t = c->tile;
     uint16_t key = 0x8000u | c->x | ((uint16_t)c->y << 5) | ((uint16_t)c->win << 10) | ((uint16_t)c->pal << 11);
-    if (placed_gen[t] == cur_gen && placed[t] == key) return;
-    placed[t] = key;
-    placed_gen[t] = cur_gen;
+    for (r = 0; r < placed_n; r++)
+        if (placed_t[r] == t) {
+            if (placed_k[r] == key) return;
+            break;
+        }
+    if (r == placed_n) {
+        if (placed_n < PLACED_N) placed_n++;
+        else {
+            r = placed_next;
+            if (++placed_next == PLACED_N) placed_next = 0;
+        }
+    }
+    placed_t[r] = t;
+    placed_k[r] = key;
     for (r = 0; r < c->h; r++) {
         for (i = 0; i < c->w; i++) rowbuf[i] = t++;
         vram_copy(map_addr(c->win, c->x, c->y + r), rowbuf, c->w);
@@ -682,10 +695,7 @@ void map_tiles(uint8_t win, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t 
 }
 
 void cv_invalidate(void) {
-    if (++cur_gen == 0) {   // wrapped: really clear
-        memset(placed_gen, 0, sizeof(placed_gen));
-        cur_gen = 1;
-    }
+    placed_n = placed_next = 0;
 }
 
 void cv_draw(const canvas_t *c) {

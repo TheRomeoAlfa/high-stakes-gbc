@@ -6,6 +6,7 @@
 #include "common.h"
 #include "lift.h"
 #include "wave.h"
+#include "board.h"
 
 uint8_t scene;
 int16_t blood, tries, chain, bchain;
@@ -20,86 +21,6 @@ uint8_t round_, bonusmode;
 char wins[8];
 uint8_t gtxt_changed;
 
-
-static const char *const helptxt[6] = {
-    "place on a face-down card.\ncard value is equal or\nhigher than token number",
-    "place on a face-up card.\ncompares the values of\nadjecent face-down cards",
-    "stab a card if you think\nit is a vampire. bonus ML\nif you get it right.",
-    "flip all cards in this\ncolumn face-up to unlock\nthis hint token.",
-    "flip all cards in this line\nface-up to unlock this\nhint token.",
-    "highlights a 2x2 area where\nthe vampire card will be."};
-
-// ------------------------------------------------------------------ save (cart SRAM)
-typedef struct {
-    uint8_t magic[4];
-    int16_t blood, tries, chain, bchain;
-    uint8_t unl[4];
-    int16_t high[4];
-    uint8_t wbin;
-} save_t;
-static save_t *const SAVEP = (save_t *)0xA000;
-#define SAVE SAVEP
-
-void savegame(void) BANKED {
-    uint8_t i;
-    ENABLE_RAM;
-    SWITCH_RAM(0);
-    SAVE->magic[0] = 'H'; SAVE->magic[1] = 'S'; SAVE->magic[2] = 'G'; SAVE->magic[3] = '1';
-    SAVE->blood = blood;
-    SAVE->tries = tries;
-    SAVE->chain = chain;
-    SAVE->bchain = bchain;
-    SAVE->wbin = wbin;
-    for (i = 0; i < 4; i++) {
-        SAVE->unl[i] = unlocked[i];
-        SAVE->high[i] = high[i];
-    }
-    DISABLE_RAM;
-}
-
-static void loadgame(void) {
-    uint8_t i;
-    ENABLE_RAM;
-    SWITCH_RAM(0);
-    if (SAVE->magic[0] == 'H' && SAVE->magic[1] == 'S' && SAVE->magic[2] == 'G' && SAVE->magic[3] == '1') {
-        blood = SAVE->blood;
-        tries = SAVE->tries;
-        chain = SAVE->chain;
-        bchain = SAVE->bchain;
-        wbin = SAVE->wbin;
-        for (i = 0; i < 4; i++) {
-            unlocked[i] = SAVE->unl[i];
-            high[i] = SAVE->high[i];
-        }
-        unlocked[0] = 1;
-        DISABLE_RAM;
-    } else {
-        DISABLE_RAM;
-        blood = tries = chain = bchain = 0;
-        wbin = 0;
-        for (i = 0; i < 4; i++) { unlocked[i] = i == 0; high[i] = 0; }
-        savegame();
-    }
-}
-
-void tempsave(void) BANKED {
-    int16_t tb;
-    if (scoremode) return;
-    tb = blood;
-    blood += wining;
-    if (blood < 0) blood = 0;
-    if (blood > 5000) blood = 5000;
-    savegame();
-    blood = tb;
-}
-
-void newgame(void) BANKED {
-    tries++;
-    blood = 20;
-    unlocked[0] = 1;
-    unlocked[1] = unlocked[2] = unlocked[3] = 0;
-    savegame();
-}
 
 // ------------------------------------------------------------------ counters
 static void stepv(int16_t *v, int16_t target) {
@@ -167,6 +88,10 @@ typedef struct {
     uint8_t lift;    // flip drawn as a hop: lift slot + 1 (0 = drawn with plain frames)
 } card_t;
 static card_t cards[9];
+// cards' height outside flips (the original's c.z / c.zd / c.zbase, 8.8, gravity 0.15): a
+// face-up card bounces when A is pressed on it, a face-down one rests 1 px up under the
+// cursor. Drawn by lift.c's raised frames while it is off the board.
+static int16_t cz[9], czd[9], czb[9];
 static uint8_t vcard, autoflip;
 
 typedef struct {
@@ -195,8 +120,8 @@ static int8_t dangrect;
 static int16_t drectsani;     // 8.8
 static uint8_t ldrect;
 static uint8_t shake;
-static uint8_t result;        // 0 none, 1 won, 2 lost, 3 pass
-static uint8_t helpi, help_drawn;
+uint8_t result;               // 0 none, 1 won, 2 lost, 3 pass
+uint8_t helpi, help_drawn;
 static int16_t helpwy;
 
 // cursor positions: top-left of the hand sprite, whose fingertip is at (+3, 0).
@@ -225,14 +150,13 @@ static const canvas_t CV_WIND = {cvbuf, 77, 0, 13, 16, 7, 1, 1, 0};
 static const canvas_t CV_STLBL = {cvbuf, 84, 0, 7, 17, 6, 1, 1, 0};
 // bonus box and pass button keep a pre-rendered highlighted variant in separate
 // tiles, so a highlight change only rewrites a few map bytes
-static const canvas_t CV_BONUS = {cvbuf, 90, 0, 0, 1, 5, 2, 1, 0};
-static const canvas_t CV_BONUS_HL = {cvbuf, 240, 0, 0, 1, 5, 2, 1, 0};
+// stake bonus box: rendered here (4x2 tiles), shown as sprites so it slides with the stake
+static const canvas_t CV_BONUS = {cvbuf, 0, 0, 0, 0, 4, 2, 0, 0};
+#define BONUS_TILE 116   // OBJ tiles 116-123 (spare in the game scene)
 static const canvas_t CV_PASS = {cvbuf, 100, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_PASS_HL = {cvbuf, 106, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_COST = {cvbuf, 235, 0, 0, 11, 5, 1, 0, 0};
 static const canvas_t CV_HELP = {dlgbuf, 115, 0, 0, 0, 20, 4, 1, 1};
-static const canvas_t CV_BANNER = {cvbuf, 115, 0, 0, 0, 20, 2, 0, 1};
-static canvas_t cv_line = {cvbuf, 155, 0, 0, 2, 20, 1, 0, 1};
 
 static void hud_stakes(void) {
     cv_begin(&CV_STAKES, 0);
@@ -296,7 +220,7 @@ static uint8_t hud_pend, help_busy;
 static uint8_t bonus_want, pass_want;
 
 static void hud_bonus_check(void) {
-    uint8_t vis = stabdx == 0;
+    uint8_t vis = 1;   // slides away with the stake instead (draw_sprites)
     uint8_t hl = cur == 16 || curstab;
     if (bonus_dirty) {
         int16_t v = calcstabonus();
@@ -310,26 +234,28 @@ static void hud_bonus_check(void) {
     if (bonus_want != bonus_shown) hud_pend |= HP_BONUS;
 }
 
-static int16_t bonus_rend[2] = {-32768, -32768};   // value rendered in each variant
+static int16_t bonus_rend[2] = {-32768, -32768};   // [0]: value in the sprite tiles, [1]: its hl
 
+// colours: frame 3 and text 2 in obj palette 4 (stake: 10, 2), highlight text 1 in palette 5
+// (14); the black inside is left transparent over the black board
 static void hud_bonus_draw(void) {
-    uint8_t vis = bonus_want & 1, hl = bonus_want >> 1;
-    const canvas_t *c = hl ? &CV_BONUS_HL : &CV_BONUS;
+    uint8_t hl = bonus_want >> 1, c;
     bonus_shown = bonus_want;
-    if (!vis) {
-        map_tiles(0, 0, 1, 5, 2, 0);
-        return;
-    }
-    if (bonus_rend[hl] != bonus_val) {
+    if (bonus_rend[0] != bonus_val || bonus_rend[1] != hl) {
         const char *t = mlstr(bonus_val, 0);
-        uint8_t w = text_w(t) + 7;
-        cv_begin(c, 0);
-        cv_frame(20 - w / 2, 2, w + 1, 9, 1);   // same pixels as rrectfill + inner black
-        cv_cprint(t, 21, 4, hl ? 1 : 2);
-        cv_flush(c);
-        bonus_rend[hl] = bonus_val;
+        // DMA source: past what the HUD canvases, the board swap and the wave use of cvbuf
+        uint8_t w = text_w(t) + 7, *b = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 2048;
+        cv_begin(&CV_BONUS, 0);
+        cv_frame(16 - w / 2, 0, w + 1, 9, 3);   // same pixels as rrectfill + inner black
+        cv_cprint(t, 17, 2, hl ? 1 : 2);
+        for (c = 0; c < 4; c++) {   // canvas rows of tiles -> 8x16 sprite pairs
+            memcpy(b + c * 32, cvbuf + c * 16, 16);
+            memcpy(b + c * 32 + 16, cvbuf + (4 + c) * 16, 16);
+        }
+        vram_dma_vbl(b, (uint8_t *)0x8000u + (BONUS_TILE << 4), 0, 8, _current_bank);
+        bonus_rend[0] = bonus_val;
+        bonus_rend[1] = hl;
     }
-    cv_place_tiles(c);
 }
 
 static void hud_bonus(void) {
@@ -361,7 +287,6 @@ static void hud_pass_render(void) {
     cv_flush(&CV_COST);
     cv_place_attrs(&CV_PASS);
     cv_place_attrs(&CV_COST);
-    cv_place_attrs(&CV_BONUS);
 }
 
 static void hud_pass_draw(void) {
@@ -391,6 +316,7 @@ static void draw_slot(uint8_t i, uint8_t s) {
     if (i < 3) lift_top[i] = k;
     map_put_vbl(slot_tx[i], slot_ty[i], 3, 2, slot_map + k * 6, slot_attr + k * 6);
     gs_drawn[i] = s;
+    if (i < 3 && cards[i].lift) lift_redraw(i);   // the card's overlap row was just covered
 }
 
 static void hud_all(void) {
@@ -422,7 +348,7 @@ static void card_land(uint8_t ci) {
     uint8_t a, f;
     lift_end(cards[ci].lift);
     cards[ci].lift = 0;
-    set_card_fr(ci, CF_FACE(face_of(ci)));
+    set_card_fr(ci, cards[ci].hidden ? CF_BACK : CF_FACE(face_of(ci)));
     // give the overlapped tile row back to its owner
     if (ci < 3) gs_drawn[ci] = 255;
     else {
@@ -466,7 +392,7 @@ static void dochip(chip_t *c) {
     else if (!c->zd && c->z == c->zbase && c->x == c->dx && c->y == c->dy && !c->delme) c->rest = 1;
 }
 
-static void dochips(void) {
+void dochips(void) BANKED {
     chip_t *c = chips;
     uint8_t i;
     for (i = chip_hi; i; i--, c++)
@@ -575,10 +501,10 @@ static void dodroptoken(void) {
 }
 
 // ------------------------------------------------------------------ round flow
-static uint8_t pend_n, pend_i;
-static const char *pend_lbl[5];
-static int16_t pend_val[5];
-static uint8_t pend_kind[5];  // 0 value, 1 no value, 2 continue
+uint8_t pend_n, pend_i;
+const char *pend_lbl[5];
+int16_t pend_val[5];
+uint8_t pend_kind[5];         // 0 value, 1 no value, 2 continue
 static char lblbuf[5][20];
 
 static void scoreline(const char *lbl, int16_t v, uint8_t kind) {
@@ -596,10 +522,23 @@ static void stabcard(uint8_t ci) {
     pflockx = CCX(ci) - 4;
 }
 
+// the cursor rests on face-down card ci (255: none): it and its chips sit 1 px up
+static void card_hover(uint8_t ci) {
+    uint8_t i;
+    uint16_t m = ci < 9 && cards[ci].hidden ? 1 << ci : 0;
+    for (i = 0; i < 9; i++) czb[i] = (m >> i) & 1 ? 256 : 0;
+    for (i = 0; i < MAXCH; i++)
+        if (chips[i].used && (chips[i].zbase != 0) != ((chips[i].cardmask & m) != 0)) {
+            chips[i].zbase = (chips[i].cardmask & m) ? 256 : 0;
+            chips[i].rest = 0;
+        }
+}
+
 enum { EG_WIN, EG_LOSE, EG_PASS, EG_STAB, EG_BADSTAB };
 
 static void endgame(uint8_t how) {
     uint8_t crds;
+    card_hover(255);
     tempsave();
     musiclvl(0);
     result = 1;
@@ -798,6 +737,9 @@ static void dobutts(void) {
                 } else { sfx(61); curshake = 10; }
             } else if (c->hidden) {
                 flipbegin(cur - 1);
+            } else if (!c->ani) {
+                int16_t *d = &czd[cur - 1];
+                *d = *d ? -*d / 2 : 205;   // 0.8
             }
         } else if (cur < 16) {
             if (curchip) returnchip();
@@ -900,6 +842,12 @@ static void draw_sprites(void) {
         if (t && (!gs_drawn[i] || map_vbl_pending(slot_tx[i], slot_ty[i])))
             spr_put16(slot_tx[i] * 8 + 5, slot_ty[i] * 8 + 3 - ((gz[i] + 15) >> 4), t, held_pal[gs[i]]);
     }
+    {   // stake bonus box: centred 4 px right of the stake (bonx = 17 - bonw / 2 + stabx)
+        int16_t bx = 4 + (stabx >> 4);
+        if (bx > -32 && bonus_rend[0] != -32768)
+            for (i = 0; i < 4; i++)
+                spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
+    }
     lift_sprites();   // card shadows under everything else
 }
 
@@ -922,7 +870,11 @@ static uint8_t help_update(void) {
     if (helpi && helpi != help_drawn) {
         cv_begin(&CV_HELP, 0);
         cv_frame(2, 1, 156, 29, 1);
-        cv_print(helptxt[helpi - 1], 7, 5, 2);
+        {
+            char *t = (char *)cvbuf + 2200;   // the texts live in save.c's bank (spare cvbuf)
+            help_text(helpi - 1, t);
+            cv_print(t, 7, 5, 2);
+        }
         cv_place(&CV_HELP);
         help_drawn = helpi;
         help_rows = 0;
@@ -943,7 +895,7 @@ static uint8_t help_update(void) {
     return busy;
 }
 
-static void game_frame(void) {
+void game_frame(void) BANKED {
     uint8_t i;
     doshake();
     for (i = 0; i < 6; i++) {
@@ -1080,10 +1032,37 @@ static void round_setup_visuals(void) {
     memset(gz, 0, sizeof(gz));
     memset(gzd, 0, sizeof(gzd));
     memset(gzb, 0, sizeof(gzb));
+    memset(cz, 0, sizeof(cz));
+    memset(czd, 0, sizeof(czd));
+    memset(czb, 0, sizeof(czb));
     hud_all();   // before the swap, so its map rows are part of it
     board_reset_map();
     curx = (int16_t)curpos[cur - 1][0] << 8;
     cury = (int16_t)curpos[cur - 1][1] << 8;
+}
+
+// an idle card's height: raised frames while it is off the board, landing when it is back
+static void card_z(uint8_t i) {
+    card_t *c = &cards[i];
+    uint8_t off;
+    if (cz[i] == czb[i] && !czd[i] && !c->lift) return;   // at rest
+    cz[i] += czd[i];
+    czd[i] -= 38;   // 0.15
+    if (cz[i] <= czb[i]) {
+        cz[i] = czb[i];
+        czd[i] = 0;
+    }
+    off = (uint8_t)((cz[i] + 128) >> 8);   // drawn at y - z, rounded
+    if (off > 3) off = 3;
+    if (!off) {
+        if (c->lift) card_land(i);
+        return;
+    }
+    if (!c->lift) {
+        if (!(c->lift = lift_begin(i))) return;   // both slots flipping: stays flat
+        c->fr = LIFT_FR_LIFTED;
+    }
+    lift_set(i, c->hidden ? LIFT_FR_HOVER : LIFT_FR_RAISED + off, face_of(i));
 }
 
 // card animations; returns flags: bit0 noani, bit1 canact
@@ -1091,7 +1070,10 @@ static uint8_t do_cards(void) {
     uint8_t i, noani = 1, canact = 1;
     card_t *c = cards;
     for (i = 0; i < 9; i++, c++) {
-        if (!c->ani && !c->delay) continue;   // idle card
+        if (!c->ani && !c->delay) {   // idle card
+            card_z(i);
+            continue;
+        }
         if (c->delay) {
             c->delay--;
             canact = 0;
@@ -1110,7 +1092,18 @@ static uint8_t do_cards(void) {
         } else if (c->ani == 1) {
             uint8_t t = c->t, f = CF_FACE(face_of(i));
             noani = 0;
-            if (t == 0 && (c->lift = lift_begin(i))) c->fr = LIFT_FR_LIFTED;
+            if (t == 0) {
+                cz[i] = czd[i] = czb[i] = 0;
+                if (!c->lift) {
+                    if (!(c->lift = lift_begin(i))) {   // both slots busy: a raised card gives one up
+                        uint8_t k;
+                        for (k = 0; k < 9; k++)
+                            if (cards[k].lift && !cards[k].ani) { card_land(k); cz[k] = czd[k] = 0; break; }
+                        c->lift = lift_begin(i);
+                    }
+                }
+                if (c->lift) c->fr = LIFT_FR_LIFTED;
+            }
             if (c->lift) lift_set(i, t, face_of(i));
             else if (t < 3) set_card_fr(i, CF_BACK);
             else if (t < 6) set_card_fr(i, CF_BACK + 1);
@@ -1137,94 +1130,6 @@ static uint8_t do_cards(void) {
 static void wait_board(uint8_t n) {
     while (n--) {
         dochips();
-        game_frame();
-    }
-}
-
-// ------------------------------------------------------------------ score panel
-static uint8_t score_phase(void) {
-    // returns 1 = next round, 0 = match over
-    int16_t wint = 100, wintstep = 60;
-    int16_t wy = BAND_LY * 16, wyd;
-    uint8_t nl = 0, i, blink = 0, pulse = 0;
-    const char *btxt = result == 3 ? "pass" : result == 1 ? "round won" : "round lost";
-    // window: banner + orange panel; the banner rows fill with the wave first
-    map_fill(1, 0, 0, 20, 18, TILE_SOLID(3), 0);
-    cv_begin(&CV_BANNER, 2);
-    cv_bignumc(btxt, 80, 3, 0, 0);
-    cv_flush(&CV_BANNER);   // shown once the wave is done
-    wave_begin();           // the loop's wave_frame lands with the window coming on
-    win_split = 1;
-    win_show = 1;
-    help_drawn = 0;
-    helpi = 0;
-    for (;;) {
-        ticksfx = 55;
-        update_gtxt();
-        wint--;
-        wyd = 112 - 16 - (nl ? 8 * nl + 4 : 0);
-        wy += ((wyd * 16) - wy) / 8;
-        WY_REG = (uint8_t)(wy >> 4);
-        win_cut = (uint8_t)(wy >> 4);
-        dochips();
-        if (wint <= 0 && pend_i < pend_n && wave_on) wave_end();   // first line next frame (its tiles)
-        else if (wint <= 0 && pend_i < pend_n && !vram_dma_busy()) {   // nor any wave upload left
-            i = pend_i++;
-            cv_line.y = 2 + nl;
-            cv_line.tile = 155 + nl * 20;
-            // "continue" uses the card back palette: same orange, plus the plum it pulses from
-            cv_line.pal = pend_kind[i] == 2 ? 2 : 0;
-            cv_begin(&cv_line, 3);
-            if (pend_kind[i] == 2) {
-                cv_print(pend_lbl[i], 58, 1, 1);
-                tempsave();
-            } else {
-                cv_print(pend_lbl[i], 12, 1, 1);
-                if (pend_kind[i] == 0) cv_rprint(mlstr(pend_val[i], 0), 148, 1, 1);
-                if (nl > 0) stakes += pend_val[i];
-            }
-            cv_draw(&cv_line);
-            nl++;
-            wint = wintstep;
-        }
-        // "continue" pulses plum -> purple a third of each second (sin(time()) < 0.5)
-        if (pend_i == pend_n && nl) {
-            uint8_t b;
-            if (++pulse >= 60) pulse = 0;
-            b = pulse >= 35 && pulse < 55;
-            if (b != blink) {
-                blink = b;
-                cv_begin(&cv_line, 3);
-                cv_print(pend_lbl[pend_n - 1], 58, 1, b ? 2 : 1);
-                cv_draw(&cv_line);
-            }
-        }
-        if (BTNP(J_A | J_B | J_START)) {
-            wintstep = 5;
-            wint = 0;
-            if (pend_i == pend_n) {
-                // winstakes
-                if (result == 2) stakes = -stakes;
-                wining += stakes;
-                stakes = 0;
-                if (round_ >= 5) {
-                    if (bonusmode && result == 1) wbin = 1;
-                    // the panel slides down behind the HUD while the counters finish
-                    while (stakes_txt != stakes || wining_txt != wining || wy < (111 << 4)) {
-                        update_gtxt();
-                        wy += ((112 << 4) - wy) / 5 + 1;
-                        WY_REG = (uint8_t)(wy >> 4);
-                        win_cut = (uint8_t)(wy >> 4);
-                        game_frame();
-                    }
-                    win_split = 0;
-                    win_cut = 0;
-                    return 0;
-                }
-                return 1;   // the panel closes with the board swap (board_reset_map)
-            }
-        }
-        if (wave_on) wave_frame(wint);
         game_frame();
     }
 }
@@ -1328,6 +1233,7 @@ void scene_game(void) BANKED {
         if (oldcur != cur) {
             sfx(63);
             memset(gzb, 0, sizeof(gzb));
+            card_hover(curchip || cur > 9 ? 255 : cur - 1);
             if (!curchip && cur >= 10 && cur <= 15) {
                 uint8_t s = gs[cur - 10];
                 if (s == 1 || s == 3) gzb[cur - 10] = 16;   // (the original also lifts the inactive box)

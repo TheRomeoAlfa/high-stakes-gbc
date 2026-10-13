@@ -34,6 +34,8 @@ extern const uint8_t vtoken[4];
 // shared helpers (game.c)
 void update_gtxt(void) BANKED;
 void savegame(void) BANKED;
+void loadgame(void) BANKED;
+void help_text(uint8_t i, char *out) BANKED;   // help box text i (0-5), up to 95 chars
 void tempsave(void) BANKED;
 void newgame(void) BANKED;
 void startmatch(void) BANKED;

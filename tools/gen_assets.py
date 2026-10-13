@@ -561,10 +561,19 @@ def lift_frames(faces, back, card_pals, slot_bot, slot_pals):
                                 1 if name == 'lift_b' else 0)
         carr(name, data, banked=True, tgt=LIFTF[gi * 4 // len(groups)])
         names.append(name)
+    # cards raised flat (rot 0): a face-up card bounced by A (z 1-3 px) and a face-down card
+    # under the cursor (zbase 1). Frames 21-23 / 24 in lift.c; no pre-blended overlaps.
+    zdata = lift_record(lift_region(back, 1, 0), card_pals, 1)
+    for v in range(2, 14):
+        for z in (1, 2, 3):
+            zdata += lift_record(lift_region(faces[v], z, 0), card_pals, 0)
+    carr('lift_z', zdata, banked=True, tgt=LIFTP[6])
     shadow = []
     for k in range(21):
         z, rot = motion[k]
         shadow += lift_shadow(lift_region(back, z, rot), rot)
+    for z in (1, 2, 3):   # shadows 21-23: raised flat
+        shadow += lift_shadow(lift_region(back, z, 0), 0)
     carr('lift_shadow', shadow, banked=True, tgt=LIFTF[3])
     define('LIFT_REC', LIFT_REC)
     define('LIFT_SHREC', LIFT_SHREC)

@@ -102,15 +102,31 @@ void lift_end(uint8_t slot1) BANKED {
     L->card = 255;
 }
 
+// what a lifted card overlaps has changed (a top slot redrawn): render it again
+void lift_redraw(uint8_t ci) BANKED {
+    uint8_t s = lslot[ci];
+    if (s) {
+        lifts[s - 1].drawn = 255;
+        lifts[s - 1].bkey = 255;
+    }
+}
+
 void lift_set(uint8_t ci, uint8_t t, uint8_t face) BANKED {
     llt[ci] = t;
     lface[ci] = face;
 }
 
-// ROM record for frame t (0..20) of card ci's flip; also its group and index in the group
+// ROM record for frame t of card ci: 0..20 its flip, 21-23 face up raised 1-3 px (a bounce),
+// 24 face down raised 1 px (under the cursor); also its group and index in the group
 static uint8_t rec_g, rec_i;
 static const uint8_t *lift_rec(uint8_t ci, uint8_t t, uint8_t *bank) {
     uint8_t g = 0;
+    if (t > 20) {
+        uint8_t i = t == LIFT_FR_HOVER ? 0 : (uint8_t)((lface[ci] - 2) * 3 + t - 20);
+        rec_g = 255;
+        *bank = BANK(lift_z);
+        return lift_z + ((uint16_t)i << 8) + ((uint16_t)i << 5);
+    }
     if (t > 10) {   // 0-9 back, 10 blank, 11-20 face
         g = lface[ci] - 1;
         t -= 11;
@@ -306,6 +322,7 @@ static void lift_render(uint8_t s) {
     // (variants 0-6 slots, 7 back), otherwise it is blended here
     if (ci < 3) v = lift_top[ci];
     else v = (!lslot[ci - 3] && lift_cfr[ci - 3] == CF_BACK) ? 7 : 255;
+    if (t > 20) v = 255;   // raised frames: no pre-blended overlaps
     if (v != 255) {
         uint8_t pb = liftp_bank(rec_g), pals[3];
         const uint8_t *pre = liftp_ptr[rec_g] + ((uint16_t)rec_i << 9) + ((uint16_t)v << 6);
@@ -319,8 +336,9 @@ static void lift_render(uint8_t s) {
     for (j = 3; j < 15; j++) L->attrs[j] = lift_hdr[j] | bankbit;
     vram_dma_vbl(rec + LIFT_HDR, dst + 48, s, 12, bank);
     map_put_vbl(L->mx, L->my, 3, 5, L->ids, L->attrs);
-    // shadow sprites
-    rec = lift_shadow + ((uint16_t)t << 8) - ((uint16_t)t << 5) - ((uint16_t)t << 4);   // t * 208
+    // shadow sprites (the hover frame has the 1 px raised one)
+    j = t == LIFT_FR_HOVER ? 21 : t;
+    rec = lift_shadow + ((uint16_t)j << 8) - ((uint16_t)j << 5) - ((uint16_t)j << 4);   // j * 208
     bank = lift_bank(255);
     banked_copy(&L->shused, bank, rec, 1);
     vram_dma_vbl(rec + 16, (uint8_t *)0x8000u + (uint16_t)s * 12 * 16, 1, 12, bank);
