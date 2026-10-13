@@ -46,6 +46,9 @@ a scanline interrupt on those lines so the board's colours survive inside the ba
   ring takes the current offset (the original's keep the offset they were born with). On the
   menu it stays on the middle card while the cards slide. Text over the rings sits on small
   black boxes.
+- Going from the title to the menu, the rings recolour in six bands by radius (the original
+  changes them ring by ring), their centre moves to the card in a few steps, and the menu's
+  text appears once the cards have settled rather than rising with them.
 - The menu draws three of the four drifting cards at once (the one farthest out is left
   out), to stay within the Game Boy's 10 sprites a line.
 - The inactive box chip doesn't lift under the cursor (no sprite palette has its colours).

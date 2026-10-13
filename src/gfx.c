@@ -16,7 +16,7 @@ const uint16_t pico[16] = {
     RGB5(41, 173, 255), RGB5(131, 118, 156), RGB5(255, 119, 168), RGB5(255, 204, 170)};
 
 uint8_t cvbuf[160 * 16];
-uint8_t dlgbuf[80 * 16];
+uint8_t dlgbuf[80 * 16 + 16];   // + 16: 80 tiles 16-byte aligned for DMA (scenes.c menu_text)
 
 static uint8_t *cb;
 static uint8_t cw, chh;   // canvas width/height in tiles
@@ -1217,28 +1217,205 @@ uint8_t win_cut;
 static uint8_t nspr, nspr_prev;
 static uint8_t *oam_p = (uint8_t *)shadow_OAM;
 
-// a w x h block (w <= 8) of 8x8 sprites, tiles t, t + 1, ... row by row, attributes
-// pr[k] | or_, clipped per sprite as spr_put (no win_cut): one call for a menu card's 12
-void spr_grid(int16_t x, int16_t y, uint8_t t, const uint8_t *pr, uint8_t or_, uint8_t w, uint8_t h) {
-    int16_t sy = y + cam_y + 16, sx = x + cam_x + 8;
-    uint8_t r, c, cm = 0, xs[8], *o = oam_p, n = nspr;
-    for (c = 0; c < w; c++, sx += 8) {
-        xs[c] = (uint8_t)sx;
-        if (sx > 0 && sx < 168) cm |= 1 << c;
-    }
-    for (r = 0; r < h; r++, sy += 8) {
-        if (sy <= 0 || sy >= 160 || !cm) { t += w; pr += w; continue; }
-        for (c = 0; c < w; c++, t++, pr++) {
-            if (!(cm & (1 << c)) || n >= 40) continue;
-            *o++ = (uint8_t)sy;
-            *o++ = xs[c];
-            *o++ = t;
-            *o++ = *pr | or_;
-            n++;
-        }
-    }
-    oam_p = o;
-    nspr = n;
+// nonzero if the 16-byte tile at p has any pixel not colour 0 (DE = p, result in A)
+uint8_t tile_ink(const uint8_t *p) __naked {
+    (void)p;
+    __asm
+    ld  h, d
+    ld  l, e
+    xor a, a
+    .rept 16
+    or  a, (hl)
+    inc hl
+    .endm
+    ret
+    __endasm;
+}
+
+// a w x h block (1 <= w <= 8, h >= 1) of 8x8 sprites, tiles t, t + 1, ... row by row,
+// attributes pr[k] | or_, clipped per sprite as spr_put (no win_cut) and from cut_ly down:
+// one call for a menu card's 12. DE = x, BC = y; t, pr, or_, w, h on the stack (callee pops).
+static uint8_t sg_xs[8], sg_t, sg_or, sg_w, sg_h, sg_cnt, sg_lim, sg_y;
+static uint8_t *sg_pr;
+static uint16_t sg_sy;
+void spr_grid(int16_t x, int16_t y, uint8_t t, const uint8_t *pr, uint8_t or_, uint8_t w, uint8_t h) __naked {
+    (void)x; (void)y; (void)t; (void)pr; (void)or_; (void)w; (void)h;
+    __asm
+    ; the arguments into statics
+    ldhl sp, #2
+    ld  a, (hl+)
+    ld  (_sg_t), a
+    ld  a, (hl+)
+    ld  (_sg_pr), a
+    ld  a, (hl+)
+    ld  (_sg_pr + 1), a
+    ld  a, (hl+)
+    ld  (_sg_or), a
+    ld  a, (hl+)
+    ld  (_sg_w), a
+    ld  a, (hl)
+    ld  (_sg_h), a
+    ; sy = y + cam_y + 16
+    ld  a, (_cam_y)
+    ld  l, a
+    rlca
+    sbc a, a
+    ld  h, a
+    add hl, bc
+    ld  bc, #16
+    add hl, bc
+    ld  a, l
+    ld  (_sg_sy), a
+    ld  a, h
+    ld  (_sg_sy + 1), a
+    ; columns: x + cam_x + 8, 0 when off screen (1..167 shown)
+    ld  a, (_cam_x)
+    ld  l, a
+    rlca
+    sbc a, a
+    ld  h, a
+    add hl, de
+    ld  de, #8
+    add hl, de
+    ld  de, #_sg_xs
+    ld  a, (_sg_w)
+    ld  b, a
+1$:
+    ld  a, h
+    or  a, a
+    jr  nz, 2$
+    ld  a, l
+    or  a, a
+    jr  z, 3$
+    cp  a, #168
+    jr  c, 3$
+2$:
+    xor a, a
+3$:
+    ld  (de), a
+    inc de
+    ld  a, l
+    add a, #8
+    ld  l, a
+    jr  nc, 4$
+    inc h
+4$:
+    dec b
+    jr  nz, 1$
+    ; rows end at cut_ly (on screen) or the screen bottom
+    ld  a, (_cut_ly)
+    or  a, a
+    jr  z, 5$
+    add a, #16
+    jr  6$
+5$:
+    ld  a, #160
+6$:
+    ld  (_sg_lim), a
+    ld  hl, #_oam_p
+    ld  a, (hl+)
+    ld  e, a
+    ld  d, (hl)             ; de: OAM write pointer
+    ld  a, (_nspr)
+    ld  c, a                ; c: sprites used
+10$:                        ; a row: shown if 0 < sy < lim
+    ld  a, (_sg_sy + 1)
+    or  a, a
+    jr  nz, 11$
+    ld  a, (_sg_sy)
+    or  a, a
+    jr  z, 11$
+    ld  b, a
+    ld  a, (_sg_lim)
+    ld  l, a
+    ld  a, b
+    cp  a, l
+    jr  nc, 11$
+    ld  (_sg_y), a
+    ld  a, (_sg_w)
+    ld  (_sg_cnt), a
+    ld  hl, #_sg_xs
+12$:                        ; a column
+    ld  a, (hl+)
+    or  a, a
+    jr  z, 13$
+    ld  b, a
+    ld  a, c
+    cp  a, #40
+    jr  nc, 13$
+    push hl
+    ld  a, (_sg_y)
+    ld  (de), a
+    inc de
+    ld  a, b
+    ld  (de), a
+    inc de
+    ld  a, (_sg_t)
+    ld  (de), a
+    inc de
+    ld  hl, #_sg_pr
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  a, (_sg_or)
+    or  a, (hl)
+    ld  (de), a
+    inc de
+    inc c
+    pop hl
+13$:
+    ld  a, (_sg_t)
+    inc a
+    ld  (_sg_t), a
+    ld  a, (_sg_pr)
+    add a, #1
+    ld  (_sg_pr), a
+    jr  nc, 14$
+    ld  a, (_sg_pr + 1)
+    inc a
+    ld  (_sg_pr + 1), a
+14$:
+    ld  a, (_sg_cnt)
+    dec a
+    ld  (_sg_cnt), a
+    jp  nz, 12$
+    jr  15$
+11$:                        ; a hidden row: skip its tiles
+    ld  a, (_sg_w)
+    ld  b, a
+    ld  a, (_sg_t)
+    add a, b
+    ld  (_sg_t), a
+    ld  a, (_sg_pr)
+    add a, b
+    ld  (_sg_pr), a
+    jr  nc, 15$
+    ld  a, (_sg_pr + 1)
+    inc a
+    ld  (_sg_pr + 1), a
+15$:                        ; next row, 8 px down
+    ld  a, (_sg_sy)
+    add a, #8
+    ld  (_sg_sy), a
+    jr  nc, 16$
+    ld  a, (_sg_sy + 1)
+    inc a
+    ld  (_sg_sy + 1), a
+16$:
+    ld  a, (_sg_h)
+    dec a
+    ld  (_sg_h), a
+    jp  nz, 10$
+    ld  hl, #_oam_p
+    ld  a, e
+    ld  (hl+), a
+    ld  (hl), d
+    ld  a, c
+    ld  (_nspr), a
+    pop hl
+    add sp, #6
+    jp  (hl)
+    __endasm;
 }
 
 // writes straight into shadow OAM; sprites are hidden again only if unused this frame.
@@ -1359,6 +1536,9 @@ uint8_t spr_hold;   // 1: keep last frame's sprites (nothing drawn this frame)
 // scrolls normally; the LCD interrupt switches SCY in the HBlank before each change (main.c).
 uint8_t box_on, box_ly0, box_ly1, box_scy;
 uint8_t ring_flip, ring_vram;
+// sprites split by the LCD interrupt (main.c): 8x16 above spl_ly, 8x8 from it (the title's
+// logo over the menu's cards); none from cut_ly (under the bar). Off when spr_split is 0.
+uint8_t spr_split, spl_ly, cut_ly;
 uint8_t box_nly0, box_nly1, box_nscy;   // next frame's, taken in VBlank
 
 void frame(void) {
@@ -1378,13 +1558,13 @@ void frame(void) {
         LCDC_REG ^= LCDCF_BG8000;
         ring_flip = 0;
     }
-    // VBlank work: DMA first (it must finish before the screen starts), the palettes, then
-    // map blocks
-    if (vd_n) vd_flush();
+    // VBlank work: the palettes (only writable in VBlank), DMA (budgeted by the line it
+    // starts on, so it still ends before the screen starts), then map blocks
     if (pal_dirty) {
         pal_apply();
         pal_dirty = 0;
     }
+    if (vd_n) vd_flush();
     if (!vd_n && vq_n) vq_flush();
     SCX_REG = scx - cam_x;
     SCY_REG = scy - cam_y;

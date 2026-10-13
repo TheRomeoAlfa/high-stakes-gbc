@@ -24,6 +24,12 @@ static void vbl_isr(void) {
     joy_isr_prev = j;
     if (win_show) LCDC_REG |= LCDCF_WINON;
     else LCDC_REG &= ~LCDCF_WINON;
+    if (spr_split) {   // every VBlank, even when the main loop runs late (lcd_isr turns them off)
+        LCDC_REG |= LCDCF_OBJON;
+        if (spl_ly) LCDC_REG |= LCDCF_OBJ16;
+        else LCDC_REG &= ~LCDCF_OBJ16;
+        LYC_REG = (spl_ly ? spl_ly : cut_ly) - 1;
+    }
 }
 
 // score banner wave: BG palette 0 colours 1-3 are swapped on the band's lines (see game.c)
@@ -45,6 +51,15 @@ static void band_write(const uint8_t *p) {   // in HBlank: palette RAM is locked
 // line it triggered on is already being drawn, and a window switched off mid-line leaves
 // its left part showing.
 static void lcd_isr(void) {
+    if (spr_split) {   // gfx.c: 8x8 sprites from spl_ly, none from cut_ly
+        uint8_t ly = LYC_REG;
+        while (STAT_REG & 3);
+        if (spl_ly && ly + 1 == spl_ly) {
+            LCDC_REG &= ~LCDCF_OBJ16;
+            if (cut_ly) LYC_REG = cut_ly - 1;
+        } else LCDC_REG &= ~LCDCF_OBJON;
+        return;
+    }
     if (box_on) {   // dialog box lines: their own scroll (gfx.c box_on)
         uint8_t ly = LY_REG;
         while (STAT_REG & 3);

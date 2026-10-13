@@ -702,7 +702,7 @@ LIFTF = [[], [], [], []]   # src/gen/lift0..3.c: card hop/flip animation, each a
 LIFT_BANK0 = 12
 LIFTP = [[] for _ in range(7)]   # src/gen/liftp0..6.c: pre-blended overlap rows, banks 5-11
 LIFTP_BANK0 = 5
-RINGF = [[] for _ in range(13)]   # src/gen/rings0..12.c: title / menu / winnings ring frames, a full bank each
+RINGF = [[] for _ in range(15)]   # src/gen/rings0..14.c: title / menu / winnings ring frames, a full bank each
 RING_BANK0 = 17
 
 
@@ -1037,23 +1037,23 @@ def main():
     # step, each born where the logo (or the chosen card) is and drifting to the screen centre
     # as it grows: radius r is centred (80, 48 + D * (1 - r / 100)) (the original's myage =
     # r / 90, at 10/9 scale). D is fixed per frame set: the title's logo bob (-3..3), the
-    # menu's chosen card (-14), the winnings' (-10). D being vertical, the ring area (20x13
-    # tiles) is mirrored left-right from its right half with tile flips: 130 tiles. A scene
-    # streams each frame by DMA into the hidden one of two copies, 0x8000 or 0x9000 (LCDC.4
-    # picks the one shown): 127 tiles in VRAM bank 1 (tile 0 blank) and the rest in bank 0's
-    # tiles 124-127. The cells always under a scene's text are left out; text elsewhere
-    # shows the rings in its blank cells (scenes.c cv_place_rings).
-    # Bank layout: 7 frames of 128 bank-1 tiles, then their bank-0 tiles (4 each).
-    # A ring's colour goes by its radius (zones 0-3, the original's circcols); a tile's
-    # palette z holds zones z..z+2 as colours 1-3, z being the nearest zone it ever shows.
+    # menu's chosen card (-14), between them for the title-to-menu move (-7, -11), and the
+    # winnings' (-10). The title, the move and the menu share one map, so the title can hand
+    # its rings to the menu. D being vertical, the ring area (20x13 tiles) is mirrored
+    # left-right from its right half with tile flips: 130 tiles. A scene streams each frame by
+    # DMA into the hidden one of two copies, 0x8000 or 0x9000 (LCDC.4 picks the one shown):
+    # 128 in VRAM bank 1 (tile 0 blank), the rest in bank 0's 124-127.
+    # Banks: 8 frames of 128 tiles each, then one bank of every frame's extra tiles (4 each).
+    # A ring's colour goes by its radius (zones 0-5: the original's circcols, the outer band
+    # split so the title-to-menu recolouring can sweep out); a tile's palette z holds zones
+    # z..z+2 as colours 1-3, z being the nearest zone it ever shows.
     cy, sp_, RR = 48, 10, 100
     def rzone(r):
-        return 0 if r < 15 else 1 if r < 26 else 2 if r < 41 else 3
+        return 0 if r < 15 else 1 if r < 26 else 2 if r < 41 else 3 if r < 60 else 4 if r < 80 else 5
     def rthick(r):   # the original's 1/2/3/4 past radius 40/55/71, scaled by 10/9
         return 1 if r <= 44 else 2 if r <= 61 else 3 if r <= 79 else 4
     ring_scenes = [
-        ('TITLE', list(range(-3, 4)), lambda ty, tx: False),
-        ('MENU', [-14], lambda ty, tx: False),
+        ('TITLE', list(range(-3, 4)) + [-7, -11, -14], lambda ty, tx: False),   # sets 7-9: the move, the menu
         ('WIN', [-10], lambda ty, tx: 4 <= ty <= 6 and 2 <= tx <= 17),
     ]
     ring_frames = []
@@ -1113,15 +1113,18 @@ def main():
         carr('ring_map_' + rname.lower(), rids, banked=True)
         carr('ring_attr_' + rname.lower(), rattrs, banked=True)
         define('RING_' + rname, base)
+        if rname == 'TITLE':
+            define('RING_MENU', base + 9 * sp_)
         define('RING_NT_' + rname, min(128, len(cells) + 1))
         define('RING_NX_' + rname, max(0, len(cells) + 1 - 128))
         print('rings', rname.lower(), len(raw), 'frames of', len(cells), 'tiles,', over, 'tiles over 3 zones')
-    assert len(ring_frames) <= 7 * len(RINGF)
-    for i in range(len(RINGF)):
-        fs = ring_frames[i * 7:i * 7 + 7]
-        blob = [v for f in fs for v in f[0]]
-        blob += [0] * (7 * 2048 - len(blob)) + [v for f in fs for v in f[1]]
+    assert len(ring_frames) <= 8 * (len(RINGF) - 1) and len(ring_frames) * 64 <= 16384
+    for i in range(len(RINGF) - 1):
+        blob = [v for f in ring_frames[i * 8:i * 8 + 8] for v in f[0]]
         carr('ring_b%d' % i, blob + [0] * (16384 - len(blob)), banked=True, tgt=RINGF[i])
+    blob = [v for f in ring_frames for v in f[1]]
+    carr('ring_b%d' % (len(RINGF) - 1), blob + [0] * (16384 - len(blob)), banked=True, tgt=RINGF[-1])
+    define('RING_XBANK', RING_BANK0 + len(RINGF) - 1)
     define('RING_BANK0', RING_BANK0)
     define('RING_STEPS', sp_)
 

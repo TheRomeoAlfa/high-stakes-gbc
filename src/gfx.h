@@ -19,7 +19,8 @@ typedef struct {
 } canvas_t;
 
 extern uint8_t ring_flip;   // frame(): switch LCDC.4 (the two ring tile copies) at VBlank
-extern uint8_t ring_vram;   // the rings wrote over the card tiles: reset_screen reloads them
+extern uint8_t ring_vram;
+extern uint8_t spr_split, spl_ly, cut_ly;   // frame() / main.c: sprite size split and cut lines   // the rings wrote over the card tiles: reset_screen reloads them
 extern uint8_t cvbuf[];   // shared scratch (160 tiles)
 extern uint8_t dlgbuf[];  // persistent buffer for dialog / help text (80 tiles)
 
@@ -86,6 +87,7 @@ void copy_objpals(uint8_t first, uint8_t n, const uint16_t *src);
 
 // ---- sprites
 extern int8_t cam_x, cam_y;
+uint8_t tile_ink(const uint8_t *p);   // any pixel not colour 0 in the tile
 void spr_grid(int16_t x, int16_t y, uint8_t t, const uint8_t *pr, uint8_t or_, uint8_t w, uint8_t h);
 void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop);
 void spr_put16(int16_t x, int16_t y, uint8_t tile, uint8_t prop);  // 16x16 (2 tiles pairs)

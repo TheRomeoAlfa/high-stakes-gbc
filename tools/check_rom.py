@@ -2,7 +2,8 @@
 """Post-link checks the linker doesn't make:
 - bank 0 must end below 0x4000 (an overflow links silently into bank 1's address range);
 - card hop data read by CGB DMA must be 16-byte aligned (lift.c), ring frames start their banks (scenes.c);
-- RAM variables must leave the stack (growing down from 0xE000) at least 768 bytes.
+- RAM variables must leave the stack (growing down from 0xE000) at least 768 bytes;
+- the ROM must stay at 512 KB (32 banks): the autobanker grows it silently.
 Usage: check_rom.py build/highstakes.map build/highstakes.noi"""
 import re
 import sys
@@ -13,6 +14,9 @@ start = int(re.search(r'([0-9A-F]{8})  s__GSFINA', mp).group(1), 16)
 length = int(re.search(r'([0-9A-F]{8})  l__GSFINA', mp).group(1), 16)
 if start + length > 0x4000:
     errs.append('bank 0 overflows: ends at 0x%04X' % (start + length))
+big = [int(n) for n in re.findall(r'^_CODE_(\d+) ', mp, re.M) if int(n) >= 32]
+if big:
+    errs.append('ROM past 512 KB: bank %d used (a module no longer fits beside the ring frames)' % max(big))
 heap = int(re.search(r'([0-9A-F]{8})  s__HEAP ', mp).group(1), 16)
 if 0xE000 - heap < 768:
     errs.append('RAM variables end at 0x%04X: only %d bytes left for the stack' % (heap, 0xE000 - heap))
