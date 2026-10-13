@@ -39,7 +39,10 @@ uint8_t score_phase(void) BANKED {
         else if (wint <= 0 && pend_i < pend_n && !vram_dma_busy()) {   // nor any wave upload left
             i = pend_i++;
             cv_line.y = 2 + nl;
-            cv_line.tile = 155 + nl * 20;
+            // 20 tiles a line; the third not at 195 (bank 0's 195-209 are a raised card's, lift.c,
+            // and the card under the cursor stays raised under the panel): bank 1's 232-251
+            cv_line.tile = nl == 2 ? 232 : 155 + nl * 20;
+            cv_line.bank = nl == 2;
             // "continue" uses the card back palette: same orange, plus the plum it pulses from
             cv_line.pal = pend_kind[i] == 2 ? 2 : 0;
             cv_begin(&cv_line, 3);
