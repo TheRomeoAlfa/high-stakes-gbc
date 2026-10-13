@@ -286,17 +286,20 @@ void scene_intro(void) BANKED {
 }
 
 // ------------------------------------------------------------------ blood vial + bar (menu / winnings)
-static void draw_vial(const canvas_t *cv, int16_t ox, int16_t oy, int16_t bl) {
-    // port of drawblood(): red rows on top mean "empty", black is blood
-    int16_t px = bl / 3 - bl / 345, pxperc;   // 1652 * bl / 5000 in 16 bits (keeps 32-bit maths out of bank 0)
-    uint8_t x, y, c;
+// port of drawblood()'s fill level: rows of the vial still red ("empty")
+static int16_t vial_level(int16_t bl) {
+    int16_t px = bl / 3 - bl / 345;   // 1652 * bl / 5000 in 16 bits (keeps 32-bit maths out of bank 0)
     static const int16_t lookup[6] = {0, 8, 30, 80, 162, 212};
-    if (px >= 212) pxperc = 10 - (px - 212) / 144;
-    else {
-        uint8_t i = 0;
-        do i++; while (!(px <= lookup[i - 1]));
-        pxperc = 15 - (i - 1);
-    }
+    uint8_t i = 0;
+    if (px >= 212) return 10 - (px - 212) / 144;
+    do i++; while (!(px <= lookup[i - 1]));
+    return 15 - (i - 1);
+}
+
+static void draw_vial(const canvas_t *cv, int16_t ox, int16_t oy, int16_t bl) {
+    // red rows on top mean "empty", black is blood
+    int16_t pxperc = vial_level(bl);
+    uint8_t x, y, c;
     cv_select(cv);
     for (y = 0; y < 19; y++)
         for (x = 0; x < 9; x++) {
@@ -504,8 +507,8 @@ void scene_ask(void) BANKED {
 // ------------------------------------------------------------------ winnings screen
 void scene_wining(void) BANKED {
     static const canvas_t txt = {cvbuf, 100, 0, 2, 4, 16, 3, 4, 0};
-    int16_t wint = 200, drip = 0, tail = 0;
-    uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, over = 0;
+    int16_t wint = 200, drip = 0, tail = 0, vlev = -1;
+    uint8_t winphase = 0, dropup, redraw = 1, rbar = 1, over = 0, turn = 0;
     const char *g1 = 0, *g2 = 0;
     fadeout(1);
     music(-1);
@@ -531,7 +534,13 @@ void scene_wining(void) BANKED {
             update_gtxt();
             rings_update();
             wint--;
-            if (redraw || (gtxt_changed & 2)) {
+            // While the drip runs both numbers tick every frame: redraw one canvas a frame,
+            // in turn, and the vial only when its level moves, or the frame rate halves.
+            if (gtxt_changed & 2) redraw = 1;
+            if (gtxt_changed & 4) rbar = 1;
+            gtxt_changed = 0;
+            if (redraw && rbar) turn ^= 1;
+            if (redraw && (!rbar || turn)) {
                 cv_begin(&txt, 0);
                 if (over) {
                     cv_cprint(g2, 64, 2, 1);
@@ -543,16 +552,18 @@ void scene_wining(void) BANKED {
                 cv_draw(&txt);
                 redraw = 0;
             }
-            if (rbar || (gtxt_changed & 4)) {
+            else if (rbar) {
                 rbar = 0;
-                cv_begin(&vial, 0);
-                draw_vial(&vial, 7, 3, blood_txt);
-                cv_draw(&vial);
+                if (vial_level(blood_txt) != vlev) {
+                    vlev = vial_level(blood_txt);
+                    cv_begin(&vial, 0);
+                    draw_vial(&vial, 7, 3, blood_txt);
+                    cv_draw(&vial);
+                }
                 cv_begin(&bar2, 0);
                 cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
                 cv_draw(&bar2);
             }
-            gtxt_changed = 0;
             if (winphase == 0) {
                 if (wint <= 0) {
                     if (!scoremode) {
