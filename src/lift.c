@@ -44,29 +44,8 @@ static uint8_t lift_lut[8][8];   // nearest colour, palette a -> b: 2 bits per s
 static uint8_t lift_hdr[18];   // record bytes 0-17: tile palettes, overlap pixel counts
 static uint8_t ov_raw[2 * 48 + 15];                     // blended overlap tiles (DMA source)
 
-void lift_luts(void) BANKED {
-    uint8_t a, b, i, j, best, code;
-    uint16_t ca, cb, d, bd;
-    int8_t dr, dg, db;
-    for (a = 0; a < 8; a++)
-        for (b = 0; b < 8; b++) {
-            code = 0;
-            for (i = 0; i < 4; i++) {
-                ca = bgpal[a * 4 + i];
-                best = 0;
-                bd = 0xFFFF;
-                for (j = 0; j < 4; j++) {
-                    cb = bgpal[b * 4 + j];
-                    dr = (int8_t)(ca & 31) - (int8_t)(cb & 31);
-                    dg = (int8_t)((ca >> 5) & 31) - (int8_t)((cb >> 5) & 31);
-                    db = (int8_t)((ca >> 10) & 31) - (int8_t)((cb >> 10) & 31);
-                    d = (uint16_t)(2 * dr * dr + 4 * dg * dg + 3 * db * db);
-                    if (d < bd) { bd = d; best = j; }
-                }
-                code |= best << (i * 2);
-            }
-            lift_lut[a][b] = code;
-        }
+void lift_luts(void) BANKED {   // (built by gen_assets.py: the palettes are constants)
+    banked_copy(lift_lut, BANK(lift_lut_data), lift_lut_data, sizeof(lift_lut));
 }
 
 void lift_reset(void) BANKED {

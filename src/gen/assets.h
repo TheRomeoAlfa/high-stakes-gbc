@@ -18,6 +18,8 @@ BANKREF_EXTERN(card_tiles)
 extern const uint8_t card_fmap[480];
 extern const uint8_t card_fattr[480];
 extern const uint16_t card_pals[16];
+extern const uint8_t lift_lut_data[64];
+BANKREF_EXTERN(lift_lut_data)
 extern const uint8_t menu_spr_tiles[768];
 BANKREF_EXTERN(menu_spr_tiles)
 extern const uint8_t menu_spr_pal[48];

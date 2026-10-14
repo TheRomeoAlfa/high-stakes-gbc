@@ -820,6 +820,20 @@ def main():
     carr('card_fmap', fmap)
     carr('card_fattr', fattr)
     pal_arr('card_pals', card_pals)
+    # lift.c's lift_lut: for BG palettes a, b as game.c board_setup sets them, each colour of a
+    # as the nearest colour of b (2 bits per index). All of them are constants, so it is built
+    # here (worked out on the GBC it took 10-27 frames of black before a match).
+    game_pals = [[0, 2, 8, 9]] + card_pals + [[0, 1, 7, 8], [0, 1, 8, 15], [0, 1, 13, 6]]
+    comps = [[(v & 31, (v >> 5) & 31, (v >> 10) & 31) for v in map(rgb555, gp)] for gp in game_pals]
+    lut = []
+    for pa in comps:
+        for pb in comps:
+            code = 0
+            for i, (r0, g0, b0) in enumerate(pa):
+                d = [2 * (r - r0) ** 2 + 4 * (g - g0) ** 2 + 3 * (b - b0) ** 2 for r, g, b in pb]
+                code |= d.index(min(d)) << (i * 2)
+            lut.append(code)
+    carr('lift_lut_data', lut, banked=True)
     prev = blank(24 * 10, 32 * 4, 0)
     for i in range(40):
         img = render_map(cpool.tiles, 0, fmap[i * 12:i * 12 + 12], fattr[i * 12:i * 12 + 12], 3, 4, card_pals, 1)
