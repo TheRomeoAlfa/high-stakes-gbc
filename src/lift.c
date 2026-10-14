@@ -285,6 +285,16 @@ static void lift_get_base(lift_t *L) {
     }
 }
 
+// does the card's overlap tile j show any colour 3 pixel?
+static uint8_t lift_c3(const uint8_t *rec, uint8_t bank, uint8_t j) {
+    uint8_t buf[24], r, *t = buf + 8;
+    banked_copy(buf, bank, rec + 18 + j * 8, 8);
+    banked_copy(t, bank, rec + 48 + j * 16, 16);
+    for (r = 0; r < 8; r++, t += 2)
+        if (buf[r] & t[0] & t[1]) return 1;
+    return 0;
+}
+
 // blends the overlap row at run time (over a face-up or hopping card) into L->ov
 static void lift_blend_rt(lift_t *L, const uint8_t *rec, uint8_t bank) {
     uint8_t j, bp, cp, cnt, *bt = L->bt, *rt = L->rt;
@@ -294,6 +304,9 @@ static void lift_blend_rt(lift_t *L, const uint8_t *rec, uint8_t bank) {
         lb_src[j] = bt;
         cnt = lift_hdr[15 + j];
         cp = lift_hdr[j];
+        // the face and back palettes share colours 0-2: if the card shows none of its
+        // colour 3 here, the base keeps its own palette (the back's pattern is colour 3)
+        if (cnt && bp != cp && (bp | cp) == 3 && !lift_c3(rec, bank, j)) cnt = 0;
         if (cnt) {   // the base recoloured to the card's palette (cached): card palettes
             //             share their dark colours, so a card's edge loses nothing
             if (L->rkey[j] != cp) {
