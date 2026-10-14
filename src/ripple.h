@@ -13,4 +13,9 @@ void mound_step(uint8_t nt, uint8_t *shown) BANKED;
 
 void bytes_rev(uint8_t *p, uint8_t n) BANKED;   // mirror tile rows (bit order) in place
 
+// the blood vial: rows still red for bl, and drawn at (ox, oy) into a canvas buffer w tiles
+// wide (by value: a const canvas in the caller's bank can't be read from ripple.c's)
+int16_t vial_level(int16_t bl) BANKED;
+void draw_vial(uint8_t *buf, uint8_t w, int16_t ox, int16_t oy, int16_t bl) BANKED;
+
 #endif

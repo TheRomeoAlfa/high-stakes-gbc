@@ -144,3 +144,23 @@ void fade_hue(const uint16_t *src, uint16_t *dst, uint8_t lvl) BANKED {
     fh_scale = fade_tab + (uint8_t)(25 - lvl) * 32;
     fh_run();
 }
+
+// palette entries from PICO-8 colours (out of bank 0: only banked code sets them)
+void set_bgpal(uint8_t n, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) BANKED {
+    uint16_t *p = bgpal + n * 4;
+    p[0] = pico[c0];
+    p[1] = pico[c1];
+    p[2] = pico[c2];
+    p[3] = pico[c3];
+    pal_dirty = 1;
+}
+
+void set_objpal(uint8_t n, uint8_t c1, uint8_t c2, uint8_t c3) BANKED {
+    uint16_t *p = objpal + n * 4;
+    p[0] = 0;
+    p[1] = pico[c1];
+    p[2] = pico[c2];
+    p[3] = pico[c3];
+    pal_dirty = 1;
+}
+

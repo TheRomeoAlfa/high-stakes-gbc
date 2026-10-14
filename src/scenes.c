@@ -506,32 +506,6 @@ void scene_intro(void) BANKED {
 }
 
 // ------------------------------------------------------------------ blood vial + bar (menu / winnings)
-// port of drawblood()'s fill level: rows of the vial still red ("empty")
-static int16_t vial_level(int16_t bl) {
-    int16_t px = bl / 3 - bl / 345;   // 1652 * bl / 5000 in 16 bits (keeps 32-bit maths out of bank 0)
-    static const int16_t lookup[6] = {0, 8, 30, 80, 162, 212};
-    uint8_t i = 0;
-    if (px >= 212) return 10 - (px - 212) / 144;
-    do i++; while (!(px <= lookup[i - 1]));
-    return 15 - (i - 1);
-}
-
-static void draw_vial(const canvas_t *cv, int16_t ox, int16_t oy, int16_t bl) {
-    // red rows on top mean "empty", black is blood
-    int16_t pxperc = vial_level(bl);
-    uint8_t x, y, c;
-    cv_select(cv);
-    for (y = 0; y < 19; y++)
-        for (x = 0; x < 9; x++) {
-            c = vial_px[y * 9 + x];
-            if (c == 8) continue;  // outside: bar colour
-            if (c == 2) c = (y < pxperc) ? 0 : 1;  // red(empty) / black(blood)
-            else c = 1;
-            cv_pset(ox + x, oy + y, c);
-            cv_pset(ox + 17 - x, oy + y, c);
-        }
-}
-
 // menu: text in BG rows 8-11 (moves with the cards) over the rings, the bar in the window
 // from line 104
 static canvas_t CV_MTXT = {0, 160, 0, 0, 8, 20, 4, 0, 0};   // (drawn in MTXT_BUF, merged: menu_comp)
@@ -539,7 +513,7 @@ static canvas_t CV_MTXT = {0, 160, 0, 0, 8, 20, 4, 0, 0};   // (drawn in MTXT_BU
 // (score mode: the bar alone, as the original's drawblood draws nothing then)
 static void bar_draw_cv(const canvas_t *vial, const canvas_t *bar2, uint8_t show_streak) {
     cv_begin(vial, 0);
-    if (!scoremode) draw_vial(vial, 7, 3, blood_txt);
+    if (!scoremode) draw_vial(vial->buf, vial->w, 7, 3, blood_txt);
     cv_draw(vial);
     cv_begin(bar2, 0);
     if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
@@ -560,7 +534,7 @@ static void bar_draw(uint8_t show_streak) {
         return;
     }
     cv_begin(&CV_VIAL, 0);
-    if (!scoremode) draw_vial(&CV_VIAL, 7, 3, blood_txt);
+    if (!scoremode) draw_vial(CV_VIAL.buf, CV_VIAL.w, 7, 3, blood_txt);
     cv_send(&CV_VIAL);
     cv_begin(&CV_BAR2, 0);
     if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 3, 1, 1);
@@ -1161,6 +1135,19 @@ static const uint8_t drip_drop[7] = {0x7E, 0x3C, 0x3C, 0x18, 0x18, 0x18, 0x18}; 
 static int16_t dp_hd[2], dp_hv[2], dp_tl[2], dp_tv[2];   // heads / tails and speeds, 8.8 px
 static uint16_t dp_h, dp_ph;                               // drop height (8.8), pulse phase
 
+// the winnings texts' rise without SDCC's 16-bit divisions (four a frame, with the text
+// redrawn as it moves, dropped every other frame of the fade-in): d / 10 as shifts (0.0996),
+// and (18 * 256 - h) * 4 / 768 as / 64 then / 3
+static int16_t tenth(int16_t d) {
+    uint16_t a = (uint16_t)(d < 0 ? -d : d);
+    a = (a >> 4) + (a >> 5) + (a >> 8) + (a >> 9);
+    return d < 0 ? -(int16_t)a : (int16_t)a;
+}
+static uint8_t px24(uint16_t h) {
+    uint8_t v = (uint8_t)((uint16_t)(18 * 256 - h) >> 6);   // h <= 18 * 256: v <= 72
+    return (uint8_t)(((uint16_t)v * 171) >> 9);           // v / 3, exact to 383
+}
+
 static void drip_start(void) {
     memset(dp_hv, 0, sizeof(dp_hv));
     memset(dp_tl, 0, sizeof(dp_tl));
@@ -1179,8 +1166,10 @@ static void drip_step(uint8_t phase) {
         if (dp_hd[i] < (100 << 8)) dp_hd[i] += dp_hv[i];
         if (dp_tl[i] < (100 << 8)) dp_tl[i] += dp_tv[i];
     }
-    if (phase == 1) dp_h += (256 - dp_h) / 50;
-    else dp_h -= dp_h / 10;
+    if (phase == 1) {   // (256 - dp_h) / 50, as 1/64 + 1/256 + 1/2048 (0.0200)
+        uint16_t a = (uint16_t)(256 - dp_h);
+        dp_h += (int16_t)((a >> 6) + (a >> 8) + (a >> 11));
+    } else dp_h -= tenth(dp_h);
     dp_ph += 273;   // a turn a second
 }
 
@@ -1219,7 +1208,7 @@ void scene_wining(void) BANKED {
     // wintxth / govertxth: each text rises 18 px into its clip (/10 a frame) and sinks out
     // again; 24 px canvas here. 8.8, 18 * 256 = fully up.
     uint16_t wth = 0, gth = 0, wtd = 18 * 256, gtd = 0;
-    const char *g1 = 0, *g2 = 0;
+    uint8_t died = 0;
     fadeout(1);
     music(-1);
     if (wining > high[mnucur]) high[mnucur] = wining;
@@ -1242,7 +1231,7 @@ void scene_wining(void) BANKED {
         vlev = vial_level(blood_txt);
         cv_begin(&vial, 0);
         cv_rect(0, 0, 31, 1, 1);
-        if (!scoremode) draw_vial(&vial, 7, 5, blood_txt);   // (score mode: the bar alone)
+        if (!scoremode) draw_vial(vial.buf, vial.w, 7, 5, blood_txt);   // (score mode: the bar alone)
         memcpy(strip + 192, cvbuf, 64);
         cv_draw(&vial);
         cv_begin(&bar2, 0);
@@ -1272,30 +1261,32 @@ void scene_wining(void) BANKED {
             if (gtxt_changed & 2) redraw = 1;
             if (gtxt_changed & 4) rbar = 1;
             gtxt_changed = 0;
-            wth += ((int16_t)(wtd - wth)) / 10;
-            gth += ((int16_t)(gtd - gth)) / 10;
-            n = (uint8_t)((uint16_t)(18 * 256 - wth) * 4 / 768);   // 24 px at 0, 0 at 18 px
+            wth += tenth((int16_t)(wtd - wth));
+            gth += tenth((int16_t)(gtd - gth));
+            n = px24(wth);   // 24 px at 0, 0 at 18 px
             if (n != dyw) { dyw = n; redraw = 1; }
-            n = (uint8_t)((uint16_t)(18 * 256 - gth) * 4 / 768);
+            n = px24(gth);
             if (n != dyg) { dyg = n; redraw = 1; }
             if (redraw && rbar) turn ^= 1;
             if (redraw && (!rbar || turn)) {
-                cv_begin(&txt, 0);
+                // drawn where its DMA reads it (cvbuf 864: canvases 0-767, drip 768), so no
+                // copy; with the separator written as bytes, it is a third of a frame, not 0.9
+                canvas_t tc = txt;
+                uint8_t x, *p;
+                tc.buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 864;
+                cv_begin(&tc, 0);
                 if (dyw < 24) {
                     cv_cprint(losses_desc ? "losses" : "winnings", 64, 2 + dyw, 1);
                     cv_bignumc(numstr(wining_txt), 64, 9 + dyw, 2, 1);
                 }
-                {   // sepline: purple line, dotted ends ("aa2a2a", plum shown black)
-                    static const uint8_t cap[6] = {0, 0, 3, 0, 3, 0};
-                    uint8_t x;
-                    cv_hline(6, 121, 23, 3);
-                    for (x = 0; x < 6; x++) {
-                        cv_pset(x, 23, cap[x]);
-                        cv_pset(127 - x, 23, cap[x]);
-                    }
-                }
-                if (placed & 1) cv_dma(&txt, 864);   // cvbuf: canvases drawn in 0-767, drip 768
-                else { cv_draw(&txt); placed |= 1; }
+                // sepline, pixel row 23: purple line, dotted ends ("aa2a2a", plum shown
+                // black): x 2, 4, 6-121, 123, 125 in colour 3, the rest of the row clear
+                for (x = 0, p = tc.buf + (32 << 4) + 14; x < 16; x++, p += 16)
+                    p[0] = p[1] = x == 0 ? 0x2B : x == 15 ? 0xD4 : 0xFF;
+                if (placed & 1)
+                    vram_dma_vbl(tc.buf, (uint8_t *)0x8000u + ((uint16_t)tc.tile << 4), tc.bank, 48,
+                                 _current_bank);
+                else { cv_draw(&tc); placed |= 1; }
                 redraw = 0;
             }
             else if (rbar) {
@@ -1304,7 +1295,7 @@ void scene_wining(void) BANKED {
                     vlev = vial_level(blood_txt);
                     cv_begin(&vial, 0);
                     cv_rect(0, 0, 31, 1, 1);
-                    if (!scoremode) draw_vial(&vial, 7, 5, blood_txt);   // (score mode: the bar alone)
+                    if (!scoremode) draw_vial(vial.buf, vial.w, 7, 5, blood_txt);   // (score mode: the bar alone)
                     memcpy(strip + 192, cvbuf, 64);   // its top row shows in the strip
                     rip |= 2;
                     cv_dma(&vial, 1632);
@@ -1337,12 +1328,12 @@ void scene_wining(void) BANKED {
             } else if (winphase == 3) {
                 if (blood <= 0) {
                     winphase = 5; wint = 400;
-                    g2 = "exsanguination"; g1 = "you died";
+                    died = 1;
                     chain = 0;
                     music(9);
                 } else if (blood >= 5000) {
                     winphase = 5; wint = 400;
-                    g2 = "congratulations"; g1 = "you won";
+                    died = 0;
                     chain++;
                     if (chain > bchain) bchain = chain;
                     music(10);
@@ -1366,7 +1357,7 @@ void scene_wining(void) BANKED {
                     fadeout(1);
                     scene = SC_END;
                     ticksfx = 0;
-                    goverprint_set(g1, g2);
+                    goverprint_set(died);
                     return;
                 }
             }
@@ -1391,47 +1382,6 @@ void scene_wining(void) BANKED {
             frame();
         }
     }
-}
-
-// ------------------------------------------------------------------ ending
-static const char *eg1, *eg2;
-void goverprint_set(const char *g1, const char *g2) BANKED { eg1 = g1; eg2 = g2; }
-
-void scene_end(void) BANKED {
-    static const canvas_t txt = {cvbuf, 100, 0, 2, 3, 16, 3, 0, 0};
-    uint16_t wint = 1000, th = 0;
-    uint8_t died = eg2[0] == 'e', tdy = 255;
-    reset_screen();
-    set_bgpal(0, 0, 9, 8, 7);
-    if (died) {
-        copy_bgpals(1, 7, glasses_pals);
-        load_bkg_banked(BANK(glasses_tiles), glasses_tiles, 1, N_GLASSES_TILES, 0);
-        map_put(0, 4, 7, GLASSES_W, GLASSES_H, glasses_map, glasses_attr);
-    } else {
-        copy_bgpals(1, 7, sunset_pals);
-        load_bkg_banked(BANK(sunset_tiles), sunset_tiles, 1, N_SUNSET_TILES, 0);
-        map_put(0, 4, 7, SUNSET_W, SUNSET_H, sunset_map, sunset_attr);
-    }
-    screen_on();
-    while (wint--) {
-        // govertxth: the text rises 18 px into its clip (/10 a frame); 24 px canvas here
-        uint8_t dy = (uint8_t)((uint16_t)(18 * 256 - th) * 24 / (18 * 256));
-        if (dy != tdy) {
-            tdy = dy;
-            cv_begin(&txt, 0);
-            cv_cprint(eg2, 64, 2 + dy, 1);
-            cv_bignumc(eg1, 64, 9 + dy, 2, 0);
-            cv_draw(&txt);
-        }
-        th += (18 * 256 - th) / 10;
-        frame();
-        if (BTNP(J_A | J_START)) break;
-    }
-    savegame();
-    fadeout(0);
-    wait_frames(120);
-    music(0);
-    scene = SC_START;
 }
 
 void gotowin(void) BANKED { scene = SC_WINING; }

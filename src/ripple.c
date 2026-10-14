@@ -4,6 +4,7 @@
 #include <gb/gb.h>
 #include <string.h>
 #include "gfx.h"
+#include "gen/assets.h"
 #include "ripple.h"
 
 // ---- the bar's edge ripples while the drip pours in (draw_wining, drpwh): its top at 104
@@ -251,3 +252,45 @@ static const uint8_t rev8[256] = {
 void bytes_rev(uint8_t *p, uint8_t n) BANKED {
     for (; n; n--, p++) *p = rev8[*p];
 }
+
+// ---- the blood vial (menu / winnings bars); out of scenes.c, whose bank is full
+// port of drawblood()'s fill level: rows of the vial still red ("empty")
+int16_t vial_level(int16_t bl) BANKED {
+    int16_t px = bl / 3 - bl / 345;   // 1652 * bl / 5000 in 16 bits (keeps 32-bit maths out of bank 0)
+    static const int16_t lookup[6] = {0, 8, 30, 80, 162, 212};
+    uint8_t i = 0;
+    if (px >= 212) return 10 - (px - 212) / 144;
+    do i++; while (!(px <= lookup[i - 1]));
+    return 15 - (i - 1);
+}
+
+// (a row's pixels as bit masks, written into the canvas's tiles: by cv_pset, two a pixel,
+// this took 3 frames)
+void draw_vial(uint8_t *buf, uint8_t w, int16_t ox, int16_t oy, int16_t bl) BANKED {
+    // red rows on top mean "empty", black is blood
+    int16_t pxperc = vial_level(bl);
+    uint8_t x, y, c, k, px, m, set[4], clr[4], *p;
+    const uint8_t *v = vial_px;
+    for (y = 0; y < 19; y++) {
+        set[0] = set[1] = set[2] = set[3] = clr[0] = clr[1] = clr[2] = clr[3] = 0;
+        for (x = 0; x < 9; x++) {
+            c = *v++;
+            if (c == 8) continue;  // outside: bar colour
+            if (c == 2) c = ((int16_t)y < pxperc) ? 0 : 1;  // red(empty) / black(blood)
+            else c = 1;
+            px = (uint8_t)ox + x;
+            m = 0x80 >> (px & 7);
+            if (c) set[px >> 3] |= m; else clr[px >> 3] |= m;
+            px = (uint8_t)ox + 17 - x;
+            m = 0x80 >> (px & 7);
+            if (c) set[px >> 3] |= m; else clr[px >> 3] |= m;
+        }
+        px = (uint8_t)oy + y;   // colour 1: low plane set, high plane clear
+        p = buf + (((uint16_t)(px >> 3) * w) << 4) + ((px & 7) << 1);
+        for (k = 0; k < 4 && k < w; k++, p += 16) {
+            p[0] = (p[0] & ~clr[k]) | set[k];
+            p[1] &= ~(clr[k] | set[k]);
+        }
+    }
+}
+

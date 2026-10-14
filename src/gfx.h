@@ -82,8 +82,8 @@ void bkg_tiles_upload(uint8_t first, uint16_t n, const uint8_t *src);   // tiles
 extern uint16_t bgpal[32], objpal[32];
 extern uint8_t fadelvl;   // 0 = normal, 16 = black
 extern uint8_t pal_dirty;
-void set_bgpal(uint8_t n, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3);
-void set_objpal(uint8_t n, uint8_t c1, uint8_t c2, uint8_t c3);
+void set_bgpal(uint8_t n, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) BANKED;   // fade.c
+void set_objpal(uint8_t n, uint8_t c1, uint8_t c2, uint8_t c3) BANKED;   // fade.c
 void copy_bgpals(uint8_t first, uint8_t n, const uint16_t *src);
 void copy_objpals(uint8_t first, uint8_t n, const uint16_t *src);
 

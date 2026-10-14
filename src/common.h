@@ -51,7 +51,7 @@ void scene_ask(void) BANKED;
 void scene_wining(void) BANKED;
 void scene_end(void) BANKED;
 void gotowin(void) BANKED;
-void goverprint_set(const char *g1, const char *g2) BANKED;
+void goverprint_set(uint8_t died) BANKED;   // ending.c: 1 you died, 0 you won
 void bonusround(void) BANKED;
 
 // card helpers

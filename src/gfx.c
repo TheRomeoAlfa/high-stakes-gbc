@@ -34,7 +34,8 @@ void cv_select(const canvas_t *c) {
     for (r = 0; r < chh && r < 18; r++, o += (uint16_t)cw << 4) rowbase[r] = o;
 }
 
-// RAM fill (GBDK's memset costs ~80 cycles/byte); fills fl_n bytes at fl_dst with fl_v
+// RAM fill (GBDK's memset costs ~80 cycles/byte); fills fl_n bytes at fl_dst with fl_v:
+// whole tiles (fl_n a multiple of 16, at most 4080), 16 bytes a loop
 static uint8_t *fl_dst;
 static uint16_t fl_n;
 static uint8_t fl_v;
@@ -43,22 +44,24 @@ static void asm_fill(void) __naked {
     __asm
     ld  hl, #_fl_n
     ld  a, (hl+)
-    ld  c, a
     ld  b, (hl)
+    and a, #0xF0
+    or  a, b
+    swap a
+    ld  c, a                ; c = n / 16
     ld  hl, #_fl_dst
     ld  a, (hl+)
     ld  h, (hl)
     ld  l, a
+    ld  a, c
+    or  a, a
+    ret z
     ld  a, (_fl_v)
-    inc b
-    inc c
-    jr  2$
 1$:
+    .rept 16
     ld  (hl+), a
-2$:
+    .endm
     dec c
-    jr  nz, 1$
-    dec b
     jr  nz, 1$
     ret
     __endasm;
@@ -291,6 +294,8 @@ static void asm_blit(void) __naked {
 // blit n rows (bit7 = leftmost) at x,y; rows fully inside the canvas vertically
 static void fast_blit(int16_t x, int16_t y, const uint8_t *rows, uint8_t n, uint8_t col) {
     uint8_t tx, yy;
+    if (y >= cph || y + n <= 0) return;   // all of it outside
+    if (y >= 0 && y < cph && y + n > cph) n = (uint8_t)(cph - y);   // cut at the bottom
     if (x < 0 || y < 0 || x >= cpw || y + n > cph) {
         uint8_t r;
         for (r = 0; r < n; r++) blit_row(x, y + r, rows[r], col);
@@ -383,7 +388,7 @@ int16_t cv_putc(char ch, int16_t x, int16_t y, uint8_t col) {
 int16_t cv_print(const char *s, int16_t x, int16_t y, uint8_t col) {
     int16_t x0 = x;
     uint8_t *base = 0;
-    uint8_t fast = 0, tx, xx, w, c, r0 = 0, cpw8 = (uint8_t)cpw;
+    uint8_t fast = 0, tx, xx, w, c, r0 = 0, cpw8 = (uint8_t)cpw, rows = 5;
     char ch;
     while ((ch = *s++)) {
         if (ch == '\n') {
@@ -395,20 +400,22 @@ int16_t cv_print(const char *s, int16_t x, int16_t y, uint8_t col) {
         c = (uint8_t)ch & 127;
         w = font_w[c];
         if (!fast) {
-            fast = 2;
-            if (y >= 0 && y + 5 <= cph) {
+            fast = y >= cph || y <= -5 ? 3 : 2;   // 3: the line is outside, only advance x
+            if (y >= 0 && y < cph) {   // (rows below the canvas cut off)
                 fast = 1;
+                rows = y + 5 <= cph ? 5 : (uint8_t)(cph - y);
                 r0 = (uint8_t)y & 7;
                 base = cb + rowbase[(uint8_t)y >> 3] + (r0 << 1);
                 a_col = col;
                 a_skip = ((uint16_t)cw << 4) - 16;
             }
         }
+        if (fast == 3) { x += w; continue; }
         // 8-bit fast path while the glyph starts inside the canvas
         if (fast == 1 && !((uint16_t)x >> 8) && (xx = (uint8_t)x) < cpw8) {
             tx = xx >> 3;
             a_g = font_rows + ((uint16_t)c << 2) + c;
-            a_rows = 5;
+            a_rows = rows;
             a_sh = xx & 7;
             a_two = (uint8_t)(tx + 1) < cw && (uint8_t)(a_sh + w) > 9;
             a_r0 = r0;
@@ -699,7 +706,8 @@ void cv_invalidate(void) {
 }
 
 // a canvas drawn into a 16-byte aligned buffer that stays as it is until the next VBlank:
-// its tiles go by DMA then (no waiting for VRAM between lines)
+// its tiles go by DMA then (no waiting for VRAM between lines). Its tiles must not cross
+// 127 -> 128 (not adjacent in VRAM: bkg_tiles_upload splits there, this does not)
 void cv_draw_vbl(const canvas_t *c) {
     vram_dma_vbl(c->buf, bg_tile_addr(c->tile), c->bank, c->w * c->h, _current_bank);
     cv_place(c);
@@ -1169,24 +1177,6 @@ uint16_t bgpal[32], objpal[32];
 uint8_t fadelvl = 25;
 uint8_t pal_dirty = 1;
 static uint8_t fading_out;
-
-void set_bgpal(uint8_t n, uint8_t c0, uint8_t c1, uint8_t c2, uint8_t c3) {
-    uint16_t *p = bgpal + n * 4;
-    p[0] = pico[c0];
-    p[1] = pico[c1];
-    p[2] = pico[c2];
-    p[3] = pico[c3];
-    pal_dirty = 1;
-}
-
-void set_objpal(uint8_t n, uint8_t c1, uint8_t c2, uint8_t c3) {
-    uint16_t *p = objpal + n * 4;
-    p[0] = 0;
-    p[1] = pico[c1];
-    p[2] = pico[c2];
-    p[3] = pico[c3];
-    pal_dirty = 1;
-}
 
 void copy_bgpals(uint8_t first, uint8_t n, const uint16_t *src) {
     memcpy(bgpal + first * 4, src, n * 8);
