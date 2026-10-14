@@ -87,36 +87,51 @@ static const uint8_t rip_k[48] = {   // x / 10 of a turn (in 64ths) k px out, 10
 uint8_t *strip;   // 12 tiles, then the vial's top row (4 tiles) to draw them over
 static uint16_t rip_ph;
 
+// the ripple's phase, every frame it is up (strip_draw may skip a frame)
+void strip_tick(uint8_t wh) BANKED {
+    if (wh) rip_ph += 683;   // 2.5 turns a second, 64ths 8.8
+}
+
 // wh: drpwh in hundredths (0 = flat)
 void strip_draw(uint8_t wh) BANKED {
     uint8_t c, k, *t, kmax = 0;
     uint16_t lq = 0, step = 0;
     for (c = 0, t = strip; c < 12; c++, t += 16) {
         if (c >= 4 && c < 8) memcpy(t, strip + 192 + (c - 4) * 16, 16);
-        else {
-            memset(t, 0, 16);
-            t[0] = t[2] = 0xFF;   // rows 0-1 black (colour 1)
+        else {   // rows 0-1 black (colour 1), the rest clear: only rows 0-2 change while it
+            t[0] = t[2] = 0xFF;   // ripples (the rest is cleared once it is flat)
+            t[1] = t[3] = t[4] = t[5] = 0;
+            if (!wh) {
+                uint8_t j;
+                for (j = 6; j < 16; j++) t[j] = 0;
+            }
         }
     }
-    if (wh) {
+    if (wh) {   // (wh <= 100: lq * 9 fits 16 bits, no 32-bit division)
         lq = (uint16_t)wh * 384 / 10;   // 15 * drpwh, 8.8
         kmax = (uint8_t)((10 + 4 * (uint16_t)wh) / 9);
-        step = (uint16_t)((uint32_t)lq * 9 / (10 + 4 * (uint16_t)wh));
-        rip_ph += 683;   // 2.5 turns a second, 64ths 8.8
+        step = (uint16_t)(lq * 9) / (10 + 4 * (uint16_t)wh);
     }
+    {
+    // the table row (lq's high byte) changes every few k: its pointer only then; each side's
+    // tile and bit step along with k (per pixel, with 16-bit shifts, this was 0.4 of a frame)
+    uint8_t ph = (uint8_t)(rip_ph >> 8), hi = 255, ml = 0x01, mr = 0x80;
+    uint8_t *tl = strip + (5 << 4), *tr = strip + (6 << 4);   // strip px 47 and 48
+    const int8_t *row = rip_h;
     for (k = 0; k < kmax && k < 48; k++, lq -= step) {
-        int8_t h = rip_h[((lq >> 8) << 6) | ((rip_k[k] - (uint8_t)(rip_ph >> 8)) & 63)];
-        uint8_t side, x, b;
-        if (!h) continue;
-        for (side = 0; side < 2; side++) {
-            x = side ? 48 + k : 47 - k;   // strip px: 79 - k and 80 + k on screen
-            t = strip + ((x >> 3) << 4);
-            b = 0x80 >> (x & 7);
-            if (h < 0) {
-                t[2] &= ~b;                // row 1 (y 103) red
-                if (h < -1) t[0] &= ~b;    // row 0 (y 102) red
-            } else t[4] |= b;             // row 2 (y 104) black
+        int8_t h;
+        if ((uint8_t)(lq >> 8) != hi) {
+            hi = (uint8_t)(lq >> 8);
+            row = rip_h + ((uint16_t)hi << 6);
         }
+        h = row[(rip_k[k] - ph) & 63];
+        if (h < 0) {
+            tl[2] &= ~ml; tr[2] &= ~mr;              // row 1 (y 103) red
+            if (h < -1) { tl[0] &= ~ml; tr[0] &= ~mr; }   // row 0 (y 102) red
+        } else if (h) { tl[4] |= ml; tr[4] |= mr; }  // row 2 (y 104) black
+        if (!(ml <<= 1)) { ml = 0x01; tl -= 16; }   // strip px 47 - k, leftwards
+        if (!(mr >>= 1)) { mr = 0x80; tr += 16; }   // strip px 48 + k, rightwards
+    }
     }
     vram_dma_vbl(strip, (uint8_t *)0x8000u + (STRIP_TILE << 4), 0, 12, _current_bank);
 }

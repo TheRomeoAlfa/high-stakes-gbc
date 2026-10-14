@@ -1155,6 +1155,8 @@ static void drip_start(void) {
     dp_hd[0] = -(int16_t)((uint16_t)rnd(90) << 8);
     dp_hd[1] = 0;
     dp_h = 0;
+    // drip_draw's tiles (cvbuf 768): it only draws, and clears, the high plane
+    memset((uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 768, 0, 96);
 }
 
 static void drip_step(uint8_t phase) {
@@ -1175,18 +1177,27 @@ static void drip_step(uint8_t phase) {
 
 static void drip_draw(uint8_t up) {
     uint8_t *b = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 768;   // past the canvases (scene_wining)
-    uint8_t i, r, n, bit;
+    // x * 21 / 20 for x 0-40 (SDCC's 16-bit divisions, with the drop's below, and clearing
+    // the whole buffer by memset, took a quarter of each frame of the drip)
+    static const uint8_t x21[41] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21,
+        22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42};
+    uint8_t i, r, n, bit, q, rem;
     int16_t a, z;
-    memset(b, 0, 96);
+    for (i = 1; i < 96; i += 2) b[i] = 0;   // (only the high plane is drawn: the low stays 0)
     for (i = 0, bit = 0x10; i < 2; i++, bit >>= 1) {
         if (dp_hd[i] <= 0) continue;
         a = dp_tl[i] > 0 ? dp_tl[i] >> 8 : 0;
         z = dp_hd[i] >> 8;
         if (z > 39) z = 39;
         if (a > z) continue;
-        a = a * 21 / 20;              // original rows a..z cover these 42-row ones
-        z = (z + 1) * 21 / 20 - 1;
-        for (; a <= z; a++) b[((up ? 41 - a : a) << 1) + 1] |= bit;
+        {   // original rows a..z cover these 42-row ones (8-bit, stepping a pointer: as
+            //  16-bit rows with a ternary each, this loop alone took 0.4 of a frame)
+            uint8_t a8 = x21[a], cnt = x21[z + 1] - a8;
+            uint8_t *p = b + 1 + ((up ? 41 - a8 : a8) << 1);
+            if (up) for (; cnt; cnt--, p -= 2) *p |= bit;
+            else for (; cnt; cnt--, p += 2) *p |= bit;
+        }
     }
     // drop: 6x7 stretched to 7 * h * (1..2) px
     {   // (1 + pulse) * h, 8.8, in 16 bits (no 32-bit maths: its library would land in bank 0)
@@ -1195,8 +1206,14 @@ static void drip_draw(uint8_t up) {
         n = (uint8_t)((m + m / 20) >> 8);
     }
     if (n > 14) n = 14;
-    for (r = 0; r < n; r++)
-        b[((up ? 41 - r : r) << 1) + 1] |= drip_drop[r * 7 / n];
+    {
+        uint8_t *p = b + 1 + (up ? 82 : 0);
+        for (r = 0, q = 0, rem = 0; r < n; r++) {   // q = r * 7 / n
+            *p |= drip_drop[q];
+            if (up) p -= 2; else p += 2;
+            for (rem += 7; rem >= n; rem -= n) q++;
+        }
+    }
     vram_dma_vbl(b, (uint8_t *)0x8000u + (DRIP_TILE << 4), 0, 6, _current_bank);
     for (i = 0; i < 3; i++) spr_put(76, 64 + i * 16, DRIP_TILE + i * 2, SPRPAL_DRIP);
 }
@@ -1226,7 +1243,7 @@ void scene_wining(void) BANKED {
     {
         static const canvas_t vial = {cvbuf, 150, 0, 8, 0, 4, 3, 7, 1};
         static const canvas_t bar2 = {cvbuf, 162, 0, 0, 3, 20, 2, 7, 1};
-        uint8_t wh = 0, rip = 0;
+        uint8_t wh = 0, rip = 0, busy = 0, tfull = 0, part;   // tfull: risen text drawn, losses_desc + 1
         strip = (uint8_t *)(((uint16_t)dlgbuf + 15) & ~15u);
         vlev = vial_level(blood_txt);
         cv_begin(&vial, 0);
@@ -1268,41 +1285,65 @@ void scene_wining(void) BANKED {
             n = px24(gth);
             if (n != dyg) { dyg = n; redraw = 1; }
             if (redraw && rbar) turn ^= 1;
+            busy = 0;
             if (redraw && (!rbar || turn)) {
                 // drawn where its DMA reads it (cvbuf 864: canvases 0-767, drip 768), so no
                 // copy; with the separator written as bytes, it is a third of a frame, not 0.9
                 canvas_t tc = txt;
                 uint8_t x, *p;
                 tc.buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 864;
-                cv_begin(&tc, 0);
-                if (dyw < 24) {
-                    cv_cprint(losses_desc ? "losses" : "winnings", 64, 2 + dyw, 1);
-                    cv_bignumc(numstr(wining_txt), 64, 9 + dyw, 2, 1);
+                busy = 1;
+                part = dyw == 0 && tfull == losses_desc + 1;
+                if (part) {
+                    // risen, only the number changed (the drip): its two tile rows alone, the
+                    // label kept (canvas rows 1-2 as a canvas of their own)
+                    canvas_t t2 = tc;
+                    t2.buf += 256;
+                    t2.y++;
+                    t2.h = 2;
+                    cv_begin(&t2, 0);
+                    cv_bignumc(numstr(wining_txt), 64, 1, 2, 1);
+                } else {
+                    cv_begin(&tc, 0);
+                    if (dyw < 24) {
+                        cv_cprint(losses_desc ? "losses" : "winnings", 64, 2 + dyw, 1);
+                        cv_bignumc(numstr(wining_txt), 64, 9 + dyw, 2, 1);
+                    }
+                    tfull = dyw == 0 ? losses_desc + 1 : 0;
                 }
                 // sepline, pixel row 23: purple line, dotted ends ("aa2a2a", plum shown
                 // black): x 2, 4, 6-121, 123, 125 in colour 3, the rest of the row clear
                 for (x = 0, p = tc.buf + (32 << 4) + 14; x < 16; x++, p += 16)
                     p[0] = p[1] = x == 0 ? 0x2B : x == 15 ? 0xD4 : 0xFF;
-                if (placed & 1)
-                    vram_dma_vbl(tc.buf, (uint8_t *)0x8000u + ((uint16_t)tc.tile << 4), tc.bank, 48,
-                                 _current_bank);
+                if (placed & 1)   // (the number alone: its rows, 32 tiles)
+                    vram_dma_vbl(tc.buf + (part ? 256 : 0),
+                                 (uint8_t *)0x8000u + ((uint16_t)(tc.tile + (part ? 16 : 0)) << 4), tc.bank,
+                                 part ? 32 : 48, _current_bank);
                 else { cv_draw(&tc); placed |= 1; }
                 redraw = 0;
             }
             else if (rbar) {
                 rbar = 0;
+                busy = 1;
+                // (drawn where their DMA reads them, cvbuf 1632 / 1824: copying them there
+                // as well cost a third of a frame)
+                canvas_t tc;
                 if (vial_level(blood_txt) != vlev) {
                     vlev = vial_level(blood_txt);
-                    cv_begin(&vial, 0);
+                    tc = vial;
+                    tc.buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 1632;
+                    cv_begin(&tc, 0);
                     cv_rect(0, 0, 31, 1, 1);
-                    if (!scoremode) draw_vial(vial.buf, vial.w, 7, 5, blood_txt);   // (score mode: the bar alone)
-                    memcpy(strip + 192, cvbuf, 64);   // its top row shows in the strip
+                    if (!scoremode) draw_vial(tc.buf, tc.w, 7, 5, blood_txt);   // (score mode: the bar alone)
+                    memcpy(strip + 192, tc.buf, 64);   // its top row shows in the strip
                     rip |= 2;
-                    cv_dma(&vial, 1632);
+                    vram_dma_vbl(tc.buf, (uint8_t *)0x8000u + ((uint16_t)tc.tile << 4), tc.bank, 12, _current_bank);
                 }
-                cv_begin(&bar2, 0);
+                tc = bar2;
+                tc.buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 1824;
+                cv_begin(&tc, 0);
                 if (!scoremode) cv_bignumc(numstr(blood_txt), 80, 5, 1, 1);
-                cv_dma(&bar2, 1824);
+                vram_dma_vbl(tc.buf, (uint8_t *)0x8000u + ((uint16_t)tc.tile << 4), tc.bank, 40, _current_bank);
             }
             if (winphase == 0) {
                 if (wint <= 0) {
@@ -1366,7 +1407,9 @@ void scene_wining(void) BANKED {
                 if (dp_tl[0] > 0 || dp_tl[1] > 0) wh = wh > 2 ? wh - 2 : 0;
                 else if ((dp_hd[0] >= (89 << 8) || dp_hd[1] >= (89 << 8)) && wh < 100) wh++;
             }
-            if (wh || rip) {   // the last frame of a ripple draws the edge flat again
+            // the ripple holds for a frame while a counter is redrawn (both: over a frame)
+            strip_tick(wh);
+            if ((wh || rip) && !busy) {   // the last frame of a ripple draws the edge flat again
                 strip_draw(wh);
                 rip = wh ? 1 : 0;
             }

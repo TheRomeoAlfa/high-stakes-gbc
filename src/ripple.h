@@ -6,6 +6,7 @@
 #define EDGE_TILE 140    // the bar's edge outside the strip
 extern uint8_t *strip;   // 16-byte aligned: the strip's 12 tiles, then the vial's top row (4)
 void strip_draw(uint8_t wh) BANKED;   // wh: drpwh in hundredths (0 = flat)
+void strip_tick(uint8_t wh) BANKED;   // the ripple's phase: each frame, before strip_draw
 
 // title_to_menu: frame nt (0-40) of the menu's bar rising over the title's; shown: its 10
 // half columns' rows so far
