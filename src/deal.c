@@ -91,3 +91,16 @@ void stake_ease(void) BANKED {
         staby += s ? s : (d > 0 ? 1 : -1);
     }
 }
+
+void startmatch(void) BANKED {
+    musiclvl(0);
+    music(1);
+    round_ = 0;
+    wining = wining_txt = 0;
+    losses_desc = 0;
+    strcpy(wins, ".....");
+    stakes_txt = 0;
+    stabx = -20 * 16;
+    staby = 0;
+    dealround();
+}

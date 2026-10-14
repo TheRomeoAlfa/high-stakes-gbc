@@ -698,6 +698,13 @@ void cv_invalidate(void) {
     placed_n = placed_next = 0;
 }
 
+// a canvas drawn into a 16-byte aligned buffer that stays as it is until the next VBlank:
+// its tiles go by DMA then (no waiting for VRAM between lines)
+void cv_draw_vbl(const canvas_t *c) {
+    vram_dma_vbl(c->buf, bg_tile_addr(c->tile), c->bank, c->w * c->h, _current_bank);
+    cv_place(c);
+}
+
 void cv_draw(const canvas_t *c) {
     cv_flush(c);
     cv_place(c);

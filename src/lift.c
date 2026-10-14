@@ -17,8 +17,12 @@
 #include "common.h"
 #include "lift.h"
 
-#define CELLX(i) (5 + ((i) % 3) * 3)
-#define CELLY(i) (2 + ((i) / 3) * 4)
+// card i's cell in tiles (5 + i % 3 * 3, 2 + i / 3 * 4): tables, as SDCC makes i % 3 and
+// i / 3 16-bit library divisions (the deal worked out every flying card's twice a frame)
+static const uint8_t cell_x[9] = {5, 8, 11, 5, 8, 11, 5, 8, 11};
+static const uint8_t cell_y[9] = {2, 2, 2, 6, 6, 6, 10, 10, 10};
+#define CELLX(i) (cell_x[i])
+#define CELLY(i) (cell_y[i])
 #define LIFT_HDR 96   // record header + overlap tiles (see LIFT_REC in gen_assets.py)
 #define TILE_ADDR(t) ((uint8_t *)0x8800u + ((uint16_t)((t) - 128) << 4))   // BG tiles >= 128
 

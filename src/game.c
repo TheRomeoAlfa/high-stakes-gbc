@@ -86,8 +86,12 @@ void reset_screen(void) BANKED {
 }
 
 // ================================================================== game board
-#define CELLX(i) (5 + ((i) % 3) * 3)
-#define CELLY(i) (2 + ((i) / 3) * 4)
+// card i's cell in tiles (5 + i % 3 * 3, 2 + i / 3 * 4): tables, as SDCC makes i % 3 and
+// i / 3 16-bit library divisions (the deal worked out every flying card's twice a frame)
+static const uint8_t cell_x[9] = {5, 8, 11, 5, 8, 11, 5, 8, 11};
+static const uint8_t cell_y[9] = {2, 2, 2, 6, 6, 6, 10, 10, 10};
+#define CELLX(i) (cell_x[i])
+#define CELLY(i) (cell_y[i])
 #define CCX(i) ((int16_t)CELLX(i) * 8 + 12)
 #define CCY(i) ((int16_t)CELLY(i) * 8 + 15)
 
@@ -165,10 +169,27 @@ static const canvas_t CV_PASS_HL = {cvbuf, 106, 0, 1, 12, 3, 2, 1, 0};
 static const canvas_t CV_COST = {cvbuf, 235, 0, 0, 11, 5, 1, 0, 0};
 static const canvas_t CV_HELP = {dlgbuf, 115, 0, 0, 0, 20, 4, 1, 1};
 
-static void hud_stakes(void) {
-    cv_begin(&CV_STAKES, 0);
+// The counters as they tick (the queue in game_frame): drawn in an aligned copy of cvbuf's
+// start and sent by DMA at VBlank, the CPU no longer waiting on VRAM for every 4 bytes (a
+// tick was over half a frame: with cards being dealt as the winnings count, frames dropped)
+static void hud_out(const canvas_t *c, uint8_t dma) {
+    if (dma) cv_draw_vbl(c);
+    else cv_draw(c);
+}
+// c, or (dma) a copy in tmp (on the stack: RAM is short) drawing at cvbuf's aligned start
+static const canvas_t *hud_at(const canvas_t *c, canvas_t *tmp, uint8_t dma) {
+    if (!dma) return c;
+    *tmp = *c;
+    tmp->buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u);
+    return tmp;
+}
+
+static void hud_stakes(uint8_t dma) {
+    canvas_t tmp;
+    const canvas_t *c = hud_at(&CV_STAKES, &tmp, dma);
+    cv_begin(c, 0);
     cv_bignumc(numstr(stakes_txt), 36, 1, 2, 1);
-    cv_draw(&CV_STAKES);
+    hud_out(c, dma);
 }
 
 static void hud_wins(void) {
@@ -189,13 +210,20 @@ static void hud_wins(void) {
     cv_draw(&CV_ROUND);
 }
 
-static void hud_winv(void) {
-    cv_begin(&CV_WINV, 0);
+static uint8_t wind_shown = 255;   // the label under the winnings as drawn
+
+static void hud_winv(uint8_t dma) {
+    canvas_t tmp;
+    const canvas_t *c = hud_at(&CV_WINV, &tmp, dma);
+    cv_begin(c, 0);
     cv_rprint(mlstr(wining_txt, 1), 52, 1, 3);
-    cv_draw(&CV_WINV);
-    cv_begin(&CV_WIND, 0);
-    cv_rprint(losses_desc ? "losses" : "winnings", 52, 1, 1);
-    cv_draw(&CV_WIND);
+    hud_out(c, dma);
+    if (wind_shown != losses_desc || !dma) {   // (only when it changes: it rarely does)
+        wind_shown = losses_desc;
+        cv_begin(&CV_WIND, 0);
+        cv_rprint(losses_desc ? "losses" : "winnings", 52, 1, 1);
+        cv_draw(&CV_WIND);
+    }
 }
 
 static int16_t hidcount(void) {
@@ -369,9 +397,9 @@ static void hud_all(void) {
     bonus_rend[0] = bonus_rend[1] = -32768;
     hud_pend = 0;
     hud_pass_render();
-    hud_stakes();
+    hud_stakes(0);
     hud_wins();
-    hud_winv();
+    hud_winv(0);
     hud_bonus();
     hud_pass();
 }
@@ -669,19 +697,6 @@ static void cardflip(uint8_t ci) {
     }
 }
 
-void startmatch(void) BANKED {
-    musiclvl(0);
-    music(1);
-    round_ = 0;
-    wining = wining_txt = 0;
-    losses_desc = 0;
-    strcpy(wins, ".....");
-    stakes_txt = 0;
-    stabx = -20 * 16;
-    staby = 0;
-    dealround();
-}
-
 // ------------------------------------------------------------------ input
 static void returnchip(void) {
     gs[curchipi] = curchip;
@@ -896,7 +911,7 @@ static uint8_t help_update(void) {
 }
 
 void game_frame(void) BANKED {
-    uint8_t i;
+    uint8_t i, dma_free = !vram_dma_busy();   // (before this frame queues any: none waiting)
     stake_ease();   // here as in the original's draw_game: on through the wait and the score
     doshake();
     for (i = 0; i < 6; i++) {
@@ -931,8 +946,9 @@ void game_frame(void) BANKED {
     } else if (hud_pend && !help_busy) {
         if (hud_pend & HP_PASS) { hud_pend &= ~HP_PASS; hud_pass_draw(); }
         else if (hud_pend & HP_BONUS) { hud_pend &= ~HP_BONUS; hud_bonus_draw(); }
-        else if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(); }
-        else { hud_pend &= ~HP_WINV; hud_winv(); }
+        else if (!dma_free) ;   // a counter's last DMA still waits: its buffer stays as it is
+        else if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(1); }
+        else { hud_pend &= ~HP_WINV; hud_winv(1); }
     }
     help_busy = 0;
     bonus_place();
@@ -1072,6 +1088,14 @@ static void card_z(uint8_t i) {
     lift_set(i, c->hidden ? LIFT_FR_HOVER : LIFT_FR_RAISED + off, face_of(i));
 }
 
+// d / 5 for the flight's easing, as 13/64 (0.203) with shifts: SDCC's 16-bit division, twice
+// for each card in the air, took most of a frame with the winnings counting as they deal
+static int16_t fifth(int16_t d) {
+    uint16_t a = (uint16_t)(d < 0 ? -d : d);   // |d| < 5041: a * 13 fits
+    a = ((a << 3) + (a << 2) + a) >> 6;
+    return d < 0 ? -(int16_t)a : (int16_t)a;
+}
+
 // card animations; returns flags: bit0 noani, bit1 canact
 static uint8_t do_cards(void) {
     uint8_t i, noani = 1, canact = 1;
@@ -1095,9 +1119,9 @@ static uint8_t do_cards(void) {
             d = tx - fx[i];
             // within a pixel: there (the original's 0.3 px tail would keep several cards
             // in the air on the same lines, past the 10 sprites a line)
-            fx[i] = d > -16 && d < 16 ? tx : fx[i] + d / 5;
+            fx[i] = d > -16 && d < 16 ? tx : fx[i] + fifth(d);
             d = ty - fy[i];
-            fy[i] = d > -16 && d < 16 ? ty : fy[i] + d / 5;
+            fy[i] = d > -16 && d < 16 ? ty : fy[i] + fifth(d);
             fz[i] += fzd[i];
             fzd[i] -= 38;
             if (fz[i] <= 0) fz[i] = fzd[i] = 0;

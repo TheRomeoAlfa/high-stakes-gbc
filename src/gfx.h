@@ -45,6 +45,7 @@ void cv_flush_tile(const canvas_t *c, uint16_t i); // upload one tile
 uint16_t cv_tile_at(int16_t x, int16_t y);       // tile index within canvas
 void cv_place(const canvas_t *c);                 // write map + attributes
 void cv_draw(const canvas_t *c);                  // flush + place (placement cached)
+void cv_draw_vbl(const canvas_t *c);   // tiles by DMA at the next VBlank (aligned buffer)
 void cv_invalidate(void);                         // forget cached placements
 void cv_flush_rows(const canvas_t *c, uint8_t r0, uint8_t n);
 void cv_place_tiles(const canvas_t *c);           // tile indices only, uncached
