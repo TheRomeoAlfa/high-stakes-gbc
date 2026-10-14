@@ -177,10 +177,11 @@ static void hud_out(const canvas_t *c, uint8_t dma) {
     else cv_draw(c);
 }
 // c, or (dma) a copy in tmp (on the stack: RAM is short) drawing at cvbuf's aligned start
+// (dma 2, 3: in cvbuf 1792 / 1872, past what the board swap uses: with the swap, wins + round)
 static const canvas_t *hud_at(const canvas_t *c, canvas_t *tmp, uint8_t dma) {
     if (!dma) return c;
     *tmp = *c;
-    tmp->buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u);
+    tmp->buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + (dma >= 2 ? 1792 + (dma - 2) * 80 : 0);
     return tmp;
 }
 
@@ -412,7 +413,7 @@ static void hud_new_round(void) {
     hud_pend = 0;
     hud_bonus();
     hud_pass();
-    hud_pend |= HP_STAKES | HP_WINV | HP_WINS | HP_ROUND;
+    hud_pend |= HP_STAKES | HP_WINV;   // (wins and round go with the swap: board_reset_map)
 }
 
 static void set_card_fr(uint8_t i, uint8_t fr) {
@@ -664,7 +665,7 @@ static void endgame(uint8_t how) {
         break;
     }
     scoreline("\x01 continue", 0, 2);
-    hud_pend |= HP_WINS;   // (queued: the round end is busy enough)
+    hud_wins(0);   // at once, as the original's (its bar is drawn each frame)
 }
 
 static void st_raise(int16_t v) {
@@ -1050,6 +1051,10 @@ static void board_reset_map(void) {
     spr_hold = 0;
     vram_dma_vbl(buf, (uint8_t *)0x9800u, 1, hid * 2, _current_bank);
     vram_dma_vbl(buf + RS_ROWS * 32, (uint8_t *)0x9800u, 0, hid * 2, _current_bank);
+    // the bar's round and wins change with the cards, in the same VBlank (the original draws
+    // its bar each frame)
+    hud_wins(2);
+    hud_round(3);
     draw_sprites();   // frame() drops sprites not drawn again
     // the score panel goes in the same VBlank as the old cards: the VBlank interrupt applies
     // win_show, so it must not change just before (or in) the VBlank before frame()'s one;
