@@ -1178,20 +1178,8 @@ void scene_game(void) BANKED {
         if (pflockdest > 0) {
             canact = 0;
             showcur = 0;
-            if (pflockdest != pflocky && (staby - stabdy < 16 && stabdy - staby < 16)) {
-                if (pflockdest - pflocky <= 4) {
-                    pflocky = pflockdest;
-                    shake = 10;
-                    sfx(56);
-                    for (i = 0; i < MAXCH; i++)
-                        if (chips[i].used) {
-                            chips[i].zd = 384;
-                            chips[i].rest = 0;
-                            chips[i].dx += (int16_t)rnd(20) - 10;
-                            chips[i].dy += (int16_t)rnd(20) - 10;
-                        }
-                } else pflocky += 4;
-            }
+            // (the original lands the stake in draw_game and acts on it in the next update:
+            // the card it hit answers a frame later)
             if (pflockdest == pflocky && pflockard != 255) {
                 if (pflockard == vcard) {
                     pflockard = 255;
@@ -1202,6 +1190,20 @@ void scene_game(void) BANKED {
                     bonus_dirty = 1;
                     pflockard = 255;
                 }
+            }
+            if (pflockdest != pflocky && (staby - stabdy < 16 && stabdy - staby < 16)) {
+                if (pflockdest - pflocky <= 4) {
+                    pflockdest = pflocky;   // it stops where it is, as the original's: 2 px short
+                    shake = 10;
+                    sfx(56);
+                    for (i = 0; i < MAXCH; i++)
+                        if (chips[i].used) {
+                            chips[i].zd = 384;
+                            chips[i].rest = 0;
+                            chips[i].dx += (int16_t)rnd(20) - 10;
+                            chips[i].dy += (int16_t)rnd(20) - 10;
+                        }
+                } else pflocky += 4;
             }
         }
         if (result) {
