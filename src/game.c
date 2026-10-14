@@ -99,7 +99,6 @@ card_t cards[9];
 // cards' height outside flips (the original's c.z / c.zd / c.zbase, 8.8, gravity 0.15): a
 // face-up card bounces when A is pressed on it, a face-down one rests 1 px up under the
 // cursor. Drawn by lift.c's raised frames while it is off the board.
-static int16_t cz[9], czd[9], czb[9];
 // dealing (dealround): each card flies in from above the screen to its cell, easing 1/5 a
 // frame, dropping from 10 px up (gravity 0.15); drawn as sprites until it lands.
 // fx / fy 12.4 (the flight spans more than 8.8 holds), fz / fzd 8.8
@@ -446,112 +445,6 @@ static void card_land(uint8_t ci) {
     }
 }
 
-// ------------------------------------------------------------------ chips
-static chip_t *newchip(void) {
-    uint8_t i;
-    for (i = 0; i < MAXCH; i++)
-        if (!chips[i].used) {
-            memset(&chips[i], 0, sizeof(chip_t));
-            chips[i].used = 1;
-            if (i >= chip_hi) chip_hi = i + 1;
-            return &chips[i];
-        }
-    return &chips[MAXCH - 1];
-}
-
-static void dochip(chip_t *c) {
-    if (c->rest) return;
-    if (c->delay) { c->delay--; return; }
-    if (c->dx - c->x >= 1 || c->x - c->dx >= 1) c->x += c->dx > c->x ? 1 : -1;
-    if (c->dy - c->y >= 1 || c->y - c->dy >= 1) c->y += c->dy > c->y ? 1 : -1;
-    c->z += c->zd;
-    c->zd -= 64;
-    if (c->z <= c->zbase) {
-        c->z = c->zbase;
-        if (c->zd > 384 || c->zd < -384) {
-            c->zd = -((c->zd >> 2) + (c->zd >> 5) + (c->zd >> 6));   // bounce: ~0.3x
-            sfx(58);
-        } else c->zd = 0;
-    }
-    if ((c->delme && c->y - (c->z >> 8) <= -10) || c->x <= -14) c->used = 0;
-    else if (!c->zd && c->z == c->zbase && c->x == c->dx && c->y == c->dy && !c->delme) c->rest = 1;
-}
-
-void dochips(void) BANKED {
-    chip_t *c = chips;
-    uint8_t i;
-    for (i = chip_hi; i; i--, c++)
-        if (c->used && !c->rest) dochip(c);
-}
-
-static void swipechips(uint8_t ci) {
-    uint8_t i;
-    uint16_t m = 1 << ci;
-    for (i = 0; i < chip_hi; i++)
-        if (chips[i].used && (chips[i].cardmask & m)) {
-            chips[i].zd = 8 * 256;
-            chips[i].delme = 1;
-            chips[i].rest = 0;
-            sfx(58);
-        }
-}
-
-static void dropchip1(uint8_t ci, uint8_t delay, int16_t z) {
-    chip_t *c = newchip();
-    uint8_t h = cards[ci].hint;
-    if (h < 2) h = 2;
-    c->x = c->dx = CCX(ci) - 7;   // the 13 px token centred on the 19 px card
-    c->y = c->dy = CCY(ci) - 3;
-    c->z = z;
-    c->zd = z ? 0 : 512;
-    c->tile = SPR_TOK2 + (h - 2) * 4;
-    c->pal = SPRPAL_TOK2;
-    c->w16 = 1;
-    c->delay = delay;
-    c->cardmask = 1 << ci;
-    cards[ci].had1 = 1;
-}
-
-static uint8_t neighbor(uint8_t ci, uint8_t dir) {
-    // 0 left, 1 right, 2 up, 3 down ; 255 = none
-    uint8_t col = ci % 3, row = ci / 3;
-    if (dir == 0) return col ? ci - 1 : 255;
-    if (dir == 1) return col < 2 ? ci + 1 : 255;
-    if (dir == 2) return row ? ci - 3 : 255;
-    return row < 2 ? ci + 3 : 255;
-}
-
-static uint8_t hasouts(uint8_t ci) {
-    uint8_t d, n;
-    for (d = 0; d < 4; d++) {
-        n = neighbor(ci, d);
-        if (n != 255 && cards[n].hidden) return 1;
-    }
-    return 0;
-}
-
-static void dropchip3(uint8_t ci) {
-    static const int8_t ox[4] = {-15, 8, -4, -4}, oy[4] = {-3, -3, -18, 11};
-    static const uint8_t lowt[4] = {SPR_ARR_L, SPR_ARR_R, SPR_ARR_U, SPR_ARR_D};
-    static const uint8_t hight[4] = {SPR_ARR_R, SPR_ARR_L, SPR_ARR_D, SPR_ARR_U};
-    uint8_t d, n;
-    cards[ci].had3 = 1;
-    for (d = 0; d < 4; d++) {
-        n = neighbor(ci, d);
-        if (n != 255 && cards[n].hidden) {
-            chip_t *c = newchip();
-            c->x = CCX(ci) - 4;
-            c->y = CCY(ci) - 3;
-            c->dx = CCX(ci) + ox[d];
-            c->dy = CCY(ci) + oy[d];
-            c->zd = 512;
-            c->tile = cards[n].val < cards[ci].val ? lowt[d] : hight[d];
-            c->pal = SPRPAL_ARR_L;
-            c->cardmask = (1 << ci) | (1 << n);
-        }
-    }
-}
-
 static void dropchip9(void) {
     uint8_t i, j, ten, hid, bestc = 0, r;
     int16_t best = -1, sc;
@@ -571,18 +464,6 @@ static void dropchip9(void) {
     dangrect = bestc;
     drectsani = 20 * 256;
     ldrect = 5;
-}
-
-static void dodroptoken(void) {
-    uint8_t cand[9], nc = 0, i, k;
-    for (i = 0; i < 9; i++)
-        if (cards[i].hidden) cand[nc++] = i;
-    for (i = 0; i < droptoken && nc; i++) {
-        k = rnd(nc);
-        // falls in from above the screen
-        dropchip1(cand[k], i * 10, (CCY(cand[k]) - 3 + 12) * 256);
-        cand[k] = cand[--nc];
-    }
 }
 
 // ------------------------------------------------------------------ round flow
@@ -611,7 +492,7 @@ static void stabcard(uint8_t ci) {
 static void card_hover(uint8_t ci) {
     uint8_t i;
     uint16_t m = ci < 9 && cards[ci].hidden ? 1 << ci : 0;
-    for (i = 0; i < 9; i++) czb[i] = (m >> i) & 1 ? 256 : 0;
+    for (i = 0; i < 9; i++) cards[i].czb = (m >> i) & 1 ? 256 : 0;
     for (i = 0; i < MAXCH; i++)
         if (chips[i].used && (chips[i].zbase != 0) != ((chips[i].cardmask & m) != 0)) {
             chips[i].zbase = (chips[i].cardmask & m) ? 256 : 0;
@@ -743,7 +624,7 @@ static void dobutts(void) {
             } else if (c->hidden) {
                 flipbegin(cur - 1);
             } else if (!c->ani) {
-                int16_t *d = &czd[cur - 1];
+                int16_t *d = &cards[cur - 1].czd;
                 *d = *d ? -*d / 2 : 205;   // 0.8
             }
         } else if (cur < 16) {
@@ -863,8 +744,9 @@ static void draw_sprites(void) {
     {   // cards flying in (dealing)
         uint8_t k, r, c, t;
         int16_t x, y, px, py;
-        for (k = 0; k < 9; k++) {
-            if (cards[k].ani != 2 || !cards[k].t) continue;
+        card_t *cd = cards;
+        for (k = 0; k < 9; k++, cd++) {
+            if (cd->ani != 2 || !cd->t) continue;
             x = fx[k] >> 4;
             y = (fy[k] >> 4) - (fz[k] >> 8);
             t = SPR_CARDBACK;
@@ -1073,9 +955,7 @@ static void round_setup_visuals(void) {
     memset(gz, 0, sizeof(gz));
     memset(gzd, 0, sizeof(gzd));
     memset(gzb, 0, sizeof(gzb));
-    memset(cz, 0, sizeof(cz));
-    memset(czd, 0, sizeof(czd));
-    memset(czb, 0, sizeof(czb));
+    for (i = 0; i < 9; i++) cards[i].cz = cards[i].czd = cards[i].czb = 0;
     hud_new_round();   // before the swap, so its map rows are part of it
     board_reset_map();
     curx = (int16_t)curpos[cur - 1][0] << 8;
@@ -1086,14 +966,14 @@ static void round_setup_visuals(void) {
 static void card_z(uint8_t i) {
     card_t *c = &cards[i];
     uint8_t off;
-    if (cz[i] == czb[i] && !czd[i] && !c->lift) return;   // at rest
-    cz[i] += czd[i];
-    czd[i] -= 38;   // 0.15
-    if (cz[i] <= czb[i]) {
-        cz[i] = czb[i];
-        czd[i] = 0;
+    if (c->cz == c->czb && !c->czd && !c->lift) return;   // at rest
+    c->cz += c->czd;
+    c->czd -= 38;   // 0.15
+    if (c->cz <= c->czb) {
+        c->cz = c->czb;
+        c->czd = 0;
     }
-    off = (uint8_t)((cz[i] + 128) >> 8);   // drawn at y - z, rounded
+    off = (uint8_t)((c->cz + 128) >> 8);   // drawn at y - z, rounded
     if (off > 3) off = 3;
     if (!off) {
         if (c->lift) card_land(i);
@@ -1115,14 +995,27 @@ static int16_t fifth(int16_t d) {
 }
 
 // card animations; returns flags: bit0 noani, bit1 canact
+// The idle cards' heights; returns a bit for each card with an animation or a delay. (A
+// function of its own: in do_cards, which keeps all its locals on the stack, these 9 tests
+// alone took 8% of every frame.)
+static uint16_t idle_cards(void) {
+    card_t *c = cards;
+    uint8_t i;
+    uint16_t busy = 0, bit = 1;
+    for (i = 0; i < 9; i++, c++, bit <<= 1) {
+        if (c->ani || c->delay) busy |= bit;
+        else if (c->cz != c->czb || c->czd || c->lift) card_z(i);
+    }
+    return busy;
+}
+
 static uint8_t do_cards(void) {
     uint8_t i, noani = 1, canact = 1;
     card_t *c = cards;
-    for (i = 0; i < 9; i++, c++) {
-        if (!c->ani && !c->delay) {   // idle card
-            card_z(i);
-            continue;
-        }
+    uint16_t busy = idle_cards();
+    if (!busy) return 3;   // (noani, canact)
+    for (i = 0; i < 9; i++, c++, busy >>= 1) {
+        if (!(busy & 1)) continue;   // idle card: idle_cards
         if (c->delay) {
             c->delay--;
             canact = 0;
@@ -1152,12 +1045,12 @@ static uint8_t do_cards(void) {
             uint8_t t = c->t, f = CF_FACE(face_of(i));
             noani = 0;
             if (t == 0) {
-                cz[i] = czd[i] = czb[i] = 0;
+                c->cz = c->czd = c->czb = 0;
                 if (!c->lift) {
                     if (!(c->lift = lift_begin(i))) {   // both slots busy: a raised card gives one up
                         uint8_t k;
                         for (k = 0; k < 9; k++)
-                            if (cards[k].lift && !cards[k].ani) { card_land(k); cz[k] = czd[k] = 0; break; }
+                            if (cards[k].lift && !cards[k].ani) { card_land(k); cards[k].cz = cards[k].czd = 0; break; }
                         c->lift = lift_begin(i);
                     }
                 }

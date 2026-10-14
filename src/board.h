@@ -9,6 +9,7 @@ typedef struct {
     uint8_t ani;     // 0 none, 1 flip, 2 deal
     uint8_t t, fr, delay;
     uint8_t lift;    // flip drawn as a hop: lift slot + 1 (0 = drawn with plain frames)
+    int16_t cz, czd, czb;   // idle height above the board, its speed, and its rest (8.8)
 } card_t;
 typedef struct {
     uint8_t used, tile, pal, w16, delay, delme;
@@ -34,7 +35,12 @@ void game_frame(void) BANKED;
 void stake_ease(void) BANKED;   // deal.c
 void pass_spr_render(void) BANKED;   // deal.c
 void vram_read(uint8_t *dst, const uint8_t *src, uint16_t n) BANKED;   // deal.c, n % 4 == 0
-void dochips(void) BANKED;
+void dochips(void) BANKED;   // chips.c
+void swipechips(uint8_t ci) BANKED;
+void dropchip1(uint8_t ci, uint8_t delay, int16_t z) BANKED;
+uint8_t hasouts(uint8_t ci) BANKED;
+void dropchip3(uint8_t ci) BANKED;
+void dodroptoken(void) BANKED;
 uint8_t score_phase(void) BANKED;
 void score_prep(uint8_t t) BANKED;     // in the wait before score_phase   // 1 = next round, 0 = match over
 

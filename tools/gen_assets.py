@@ -1207,6 +1207,16 @@ def main():
 
     # ---------------- audio
     aud_arr('p8_sfx', list(ROM[0x3200:0x3200 + 64 * 68]))
+    # each sfx's last note with a volume (sound.c voice_start scanned for it at every start:
+    # four at once when a music pattern starts, a frame drop with the board busy)
+    last = []
+    for n in range(64):
+        sx = ROM[0x3200 + n * 68:0x3200 + n * 68 + 64]
+        k = 0
+        for i in range(32):
+            if sx[i * 2 + 1] & 0x0E: k = i
+        last.append(k)
+    aud_arr('p8_sfx_last', last)
     aud_arr('p8_music', list(ROM[0x3100:0x3100 + 256]))
     ptab = []
     for i in range(108):

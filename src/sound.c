@@ -223,15 +223,10 @@ static uint8_t seq_advance(seq_t *q, uint8_t *lo, uint8_t *hi) {
 
 static void voice_start(uint8_t v, uint8_t n) {
     voice_t *p = &V[v];
-    uint8_t i;
-    const uint8_t *hi;
     seq_start(&p->sq, p8_sfx + (uint16_t)n * 68);
     p->on = 1;
     p->cust = 0;
-    p->last = 0;
-    hi = p->sq.s + 1;
-    for (i = 0; i < 32; i++, hi += 2)
-        if (*hi & 0x0E) p->last = i;
+    p->last = p8_sfx_last[n];   // its last note with a volume (gen_assets.py)
     p->n.vol = 0;
     p->n.pitch = 0;
     p->ov = 0;

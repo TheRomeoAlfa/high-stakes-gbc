@@ -10,7 +10,7 @@ FASTFLAGS = -Wf--opt-code-speed -Wf--max-allocs-per-node50000
 
 GEN = src/gen/assets0.c src/gen/assetsb.c src/gen/lift0.c src/gen/lift1.c src/gen/lift2.c src/gen/lift3.c \
       $(patsubst %,src/gen/liftp%.c,0 1 2 3 4 5 6) $(patsubst %,src/gen/rings%.c,0 1 2 3 4 5 6 7 8 9 10 11 12 13 14)
-SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/lift.c src/wave.c src/save.c src/score.c src/fade.c src/deal.c src/ripple.c src/dmg.c src/ending.c $(GEN)
+SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/lift.c src/wave.c src/save.c src/score.c src/fade.c src/deal.c src/ripple.c src/dmg.c src/ending.c src/chips.c $(GEN)
 OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
 ROM = build/highstakes.gbc
 
