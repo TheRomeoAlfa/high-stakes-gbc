@@ -828,8 +828,8 @@ static void draw_sprites(void) {
         // + stabx). Before the cards flying in: on its lines (10-25) at most two of them fly at
         // once, 6 sprites, so it keeps its 4 of the 10 a line holds.
         int16_t bx = 4 + (stabx >> 4);
-        // (gone with the stake once it is out, -30: the original's box is off screen there)
-        if ((stabx || (bonus_want & 2)) && stabx > -30 * 16 && bonus_rend[0] != -32768)
+        // (gone with the stake once it is out, from -29: only its 1 px edge shows there)
+        if ((stabx || (bonus_want & 2)) && stabx > -29 * 16 && bonus_rend[0] != -32768)
             for (i = 0; i < 4; i++)
                 spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
     }
@@ -897,6 +897,7 @@ static uint8_t help_update(void) {
 
 void game_frame(void) BANKED {
     uint8_t i;
+    stake_ease();   // here as in the original's draw_game: on through the wait and the score
     doshake();
     for (i = 0; i < 6; i++) {
         uint8_t s = gs[i];
@@ -1174,18 +1175,6 @@ void scene_game(void) BANKED {
             canact = 0;
         }
         dochips();
-        // stake motion
-        // easing with shifts instead of 16-bit divisions (~1/10 and 1/4 per frame)
-        if (stabx != stabdx) {
-            int16_t d = stabdx - stabx;
-            int16_t s = (d >> 3) - (d >> 5);
-            stabx += s ? s : (d > 0 ? 1 : -1);
-        }
-        if (staby != stabdy) {
-            int16_t d = stabdy - staby;
-            int16_t s = d >> 2;
-            staby += s ? s : (d > 0 ? 1 : -1);
-        }
         if (pflockdest > 0) {
             canact = 0;
             showcur = 0;

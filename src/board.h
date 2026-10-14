@@ -31,6 +31,7 @@ extern uint8_t pend_n, pend_i, pend_kind[5];
 extern int16_t pend_val[5];
 extern const char *pend_lbl[5];
 void game_frame(void) BANKED;
+void stake_ease(void) BANKED;   // deal.c
 void dochips(void) BANKED;
 uint8_t score_phase(void) BANKED;
 void score_prep(uint8_t t) BANKED;     // in the wait before score_phase   // 1 = next round, 0 = match over

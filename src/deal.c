@@ -77,3 +77,17 @@ void bonusround(void) BANKED {
     stabdx = -30 * 16;
 }
 
+
+// stake motion, eased with shifts instead of 16-bit divisions (~1/10 and 1/4 per frame)
+void stake_ease(void) BANKED {
+    if (stabx != stabdx) {
+        int16_t d = stabdx - stabx;
+        int16_t s = (d >> 3) - (d >> 5);
+        stabx += s ? s : (d > 0 ? 1 : -1);
+    }
+    if (staby != stabdy) {
+        int16_t d = stabdy - staby;
+        int16_t s = d >> 2;
+        staby += s ? s : (d > 0 ? 1 : -1);
+    }
+}
