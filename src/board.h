@@ -32,6 +32,8 @@ extern int16_t pend_val[5];
 extern const char *pend_lbl[5];
 void game_frame(void) BANKED;
 void stake_ease(void) BANKED;   // deal.c
+void pass_spr_render(void) BANKED;   // deal.c
+void vram_read(uint8_t *dst, const uint8_t *src, uint16_t n) BANKED;   // deal.c, n % 4 == 0
 void dochips(void) BANKED;
 uint8_t score_phase(void) BANKED;
 void score_prep(uint8_t t) BANKED;     // in the wait before score_phase   // 1 = next round, 0 = match over

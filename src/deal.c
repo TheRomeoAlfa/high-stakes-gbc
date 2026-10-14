@@ -104,3 +104,81 @@ void startmatch(void) BANKED {
     staby = 0;
     dealround();
 }
+
+// Reads n (a multiple of 4) bytes of VRAM into RAM while the screen is on: four at a time
+// once STAT shows mode 0 or 1. The mode after those is 2, when VRAM is still free, so the
+// four reads land in time with interrupts held off only for them (one byte per wait, in C,
+// took over 3 frames for the board swap's map rows).
+static uint8_t *vr_dst;
+static const uint8_t *vr_src;
+static uint16_t vr_n;
+static void vr_copy(void) __naked {
+    __asm
+    ld  hl, #_vr_n
+    ld  a, (hl+)
+    ld  b, (hl)
+    srl b
+    rra
+    srl b
+    rra
+    ld  c, a                ; bc = n / 4
+    ld  hl, #_vr_dst
+    ld  a, (hl+)
+    ld  e, a
+    ld  d, (hl)
+    ld  hl, #_vr_src
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+1$:
+    di
+2$:
+    ldh a, (_STAT_REG + 0)
+    and a, #2
+    jr  z, 3$
+    ei
+    nop
+    di
+    jr  2$
+3$:
+    ld  a, (hl+)
+    ld  (de), a
+    inc de
+    ld  a, (hl+)
+    ld  (de), a
+    inc de
+    ld  a, (hl+)
+    ld  (de), a
+    inc de
+    ld  a, (hl+)
+    ld  (de), a
+    inc de
+    ei
+    dec bc
+    ld  a, b
+    or  a, c
+    jr  nz, 1$
+    ret
+    __endasm;
+}
+
+void vram_read(uint8_t *dst, const uint8_t *src, uint16_t n) BANKED {
+    vr_dst = dst;
+    vr_src = src;
+    vr_n = n;
+    vr_copy();
+}
+
+// the highlighted "pass": OBJ tiles PASS_TILE.. (game.c)
+#define PASS_TILE 124
+void pass_spr_render(void) BANKED {   // (game.c: its bank is full)
+    static const canvas_t cv = {cvbuf, 0, 0, 0, 0, 2, 2, 0, 0};
+    uint8_t c, *b = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 2048 + 128;   // past the stake box's
+    cv_begin(&cv, 0);
+    cv_print("pass", 0, 0, 1);
+    for (c = 0; c < 2; c++) {   // canvas tiles -> 8x16 pairs
+        memcpy(b + c * 32, cvbuf + c * 16, 16);
+        memcpy(b + c * 32 + 16, cvbuf + (2 + c) * 16, 16);
+    }
+    vram_dma_vbl(b, (uint8_t *)0x8000u + (PASS_TILE << 4), 0, 4, _current_bank);
+}

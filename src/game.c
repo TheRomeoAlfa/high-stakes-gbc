@@ -192,22 +192,29 @@ static void hud_stakes(uint8_t dma) {
     hud_out(c, dma);
 }
 
-static void hud_wins(void) {
+static void hud_wins(uint8_t dma) {
     uint8_t i;
-    char c[2] = {0, 0};
-    cv_begin(&CV_WINS, 0);
+    char ch[2] = {0, 0};
+    canvas_t tmp;
+    const canvas_t *c = hud_at(&CV_WINS, &tmp, dma);
+    cv_begin(c, 0);
     for (i = 0; i < 5; i++) {
-        c[0] = wins[i];
-        cv_print(c, 8 + i * 4, 1, (i + 1 == round_) ? 2 : 3);
+        ch[0] = wins[i];
+        cv_print(ch, 8 + i * 4, 1, (i + 1 == round_) ? 2 : 3);
     }
-    cv_draw(&CV_WINS);
-    cv_begin(&CV_ROUND, 0);
+    hud_out(c, dma);
+}
+
+static void hud_round(uint8_t dma) {
+    canvas_t tmp;
+    const canvas_t *c = hud_at(&CV_ROUND, &tmp, dma);
+    cv_begin(c, 0);
     if (bonusmode) cv_print("bonus", 8, 1, 1);
     else {
         s_begin(); s_str("round "); s_num(round_);
         cv_print(s_end(), 8, 1, 1);
     }
-    cv_draw(&CV_ROUND);
+    hud_out(c, dma);
 }
 
 static uint8_t wind_shown = 255;   // the label under the winnings as drawn
@@ -252,6 +259,8 @@ static uint8_t hud_pend, help_busy;
 #define HP_WINV 2
 #define HP_BONUS 4
 #define HP_PASS 8
+#define HP_WINS 16
+#define HP_ROUND 32
 static uint8_t bonus_want, pass_want;
 
 static void hud_bonus_check(void) {
@@ -333,17 +342,6 @@ static void hud_pass_check(void) {
 // the highlighted "pass" in pink (the original's colour 14, in no BG palette here): sprites
 // over the button's text, OBJ tiles 124-127, palette 5
 #define PASS_TILE 124
-static void pass_spr_render(void) {
-    static const canvas_t cv = {cvbuf, 0, 0, 0, 0, 2, 2, 0, 0};
-    uint8_t c, *b = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u) + 2048 + 128;   // past the stake box's
-    cv_begin(&cv, 0);
-    cv_print("pass", 0, 0, 1);
-    for (c = 0; c < 2; c++) {   // canvas tiles -> 8x16 pairs
-        memcpy(b + c * 32, cvbuf + c * 16, 16);
-        memcpy(b + c * 32 + 16, cvbuf + (2 + c) * 16, 16);
-    }
-    vram_dma_vbl(b, (uint8_t *)0x8000u + (PASS_TILE << 4), 0, 4, _current_bank);
-}
 
 // renders both pass button variants and the cost label (cost only changes per match)
 static void hud_pass_render(void) {
@@ -398,10 +396,23 @@ static void hud_all(void) {
     hud_pend = 0;
     hud_pass_render();
     hud_stakes(0);
-    hud_wins();
+    hud_wins(0);
+    hud_round(0);
     hud_winv(0);
     hud_bonus();
     hud_pass();
+}
+
+// a new round: the stake box and the pass button now (the board swap carries their rows),
+// the bar's counters and round through the queue in the frames after it (all of it at once
+// held the screen still for over 3 frames); the pass button's tiles only change per match
+static void hud_new_round(void) {
+    bonus_shown = pass_shown = 255;
+    bonus_rend[0] = bonus_rend[1] = -32768;
+    hud_pend = 0;
+    hud_bonus();
+    hud_pass();
+    hud_pend |= HP_STAKES | HP_WINV | HP_WINS | HP_ROUND;
 }
 
 static void set_card_fr(uint8_t i, uint8_t fr) {
@@ -653,7 +664,7 @@ static void endgame(uint8_t how) {
         break;
     }
     scoreline("\x01 continue", 0, 2);
-    hud_wins();
+    hud_pend |= HP_WINS;   // (queued: the round end is busy enough)
 }
 
 static void st_raise(int16_t v) {
@@ -948,7 +959,9 @@ void game_frame(void) BANKED {
         else if (hud_pend & HP_BONUS) { hud_pend &= ~HP_BONUS; hud_bonus_draw(); }
         else if (!dma_free) ;   // a counter's last DMA still waits: its buffer stays as it is
         else if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(1); }
-        else { hud_pend &= ~HP_WINV; hud_winv(1); }
+        else if (hud_pend & HP_WINV) { hud_pend &= ~HP_WINV; hud_winv(1); }
+        else if (hud_pend & HP_WINS) { hud_pend &= ~HP_WINS; hud_wins(1); }
+        else { hud_pend &= ~HP_ROUND; hud_round(1); }
     }
     help_busy = 0;
     bonus_place();
@@ -997,19 +1010,14 @@ static void board_setup(void) {
 static void board_reset_map(void) {
     static const uint8_t sidx[11] = {0, 1, 2, 3, 4, 0, 0, 0, 0, 5, 6};
     uint8_t *buf = (uint8_t *)(((uint16_t)cvbuf + 15) & ~15u);   // attrs, then tiles
-    uint8_t *vp, *p, i, r, c, k, plane, hid;
+    uint8_t i, r, c, k, plane, hid;
     const uint8_t *src;
     // the old round's sprites stay up until the swap (the new round has cleared its chips)
     spr_hold = 1;
     while (map_vbl_queued() || vram_dma_busy()) frame();   // nothing pending may overwrite these rows
-    for (plane = 0, p = buf; plane < 2; plane++) {
+    for (plane = 0; plane < 2; plane++) {
         VBK_REG = 1 - plane;
-        for (vp = (uint8_t *)0x9800u; vp < (uint8_t *)0x9800u + RS_ROWS * 32; ) {
-            CRITICAL {
-                while (STAT_REG & 2);
-                *p++ = *vp++;
-            }
-        }
+        vram_read(buf + plane * RS_ROWS * 32, (const uint8_t *)0x9800u, RS_ROWS * 32);
     }
     VBK_REG = 0;
     for (plane = 0; plane < 2; plane++)
@@ -1058,7 +1066,7 @@ static void round_setup_visuals(void) {
     memset(cz, 0, sizeof(cz));
     memset(czd, 0, sizeof(czd));
     memset(czb, 0, sizeof(czb));
-    hud_all();   // before the swap, so its map rows are part of it
+    hud_new_round();   // before the swap, so its map rows are part of it
     board_reset_map();
     curx = (int16_t)curpos[cur - 1][0] << 8;
     cury = (int16_t)curpos[cur - 1][1] << 8;
