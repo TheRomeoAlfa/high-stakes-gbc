@@ -49,6 +49,8 @@ uint8_t score_phase(void) BANKED {
     }
     score_ready = 0;
     wave_begin();           // the loop's wave_frame lands with the window coming on
+    WY_REG = BAND_LY;
+    win_cut = BAND_LY;
     win_split = 1;
     win_show = 1;
     help_drawn = 0;
@@ -59,8 +61,7 @@ uint8_t score_phase(void) BANKED {
         wint--;
         wyd = 112 - 16 - (nl ? 8 * nl + 4 : 0);
         wy += ((wyd * 16) - wy) / 8;
-        WY_REG = (uint8_t)(wy >> 4);
-        win_cut = (uint8_t)(wy >> 4);
+        win_cut = (uint8_t)(wy >> 4);   // main.c lcd_isr moves the window at line 111
         dochips();
         if (wint <= 0 && pend_i < pend_n && wave_on) wave_end();   // first line next frame (its tiles)
         else if (wint <= 0 && pend_i < pend_n && !vram_dma_busy()) {   // nor any wave upload left
@@ -111,7 +112,6 @@ uint8_t score_phase(void) BANKED {
                     while (stakes_txt != stakes || wining_txt != wining || wy < (111 << 4)) {
                         update_gtxt();
                         wy += ((112 << 4) - wy) / 5 + 1;
-                        WY_REG = (uint8_t)(wy >> 4);
                         win_cut = (uint8_t)(wy >> 4);
                         game_frame();
                     }

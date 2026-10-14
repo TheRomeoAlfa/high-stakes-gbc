@@ -112,7 +112,8 @@ void screen_on(void);
 void clear_bg(void);
 
 uint8_t rnd(uint8_t n);
-extern uint8_t win_cut;  // sprites below this window line are hidden (0 = off)
+extern volatile uint8_t win_cut;  // no sprites from this line (the score window's top) to
+                                  // 111 (0 = off): main.c lcd_isr
 
 // string builder (bank 0 so literals from any ROM bank are readable)
 extern char sbuf[48];

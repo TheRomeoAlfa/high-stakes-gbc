@@ -1213,7 +1213,7 @@ static void pal_apply(void) {
 
 // ---------------------------------------------------------------- sprites
 int8_t cam_x, cam_y;
-uint8_t win_cut;
+volatile uint8_t win_cut;
 static uint8_t nspr, nspr_prev;
 static uint8_t *oam_p = (uint8_t *)shadow_OAM;
 
@@ -1443,7 +1443,7 @@ uint8_t tile_ink(const uint8_t *p) __naked {
 }
 
 // a w x h block (1 <= w <= 8, h >= 1) of 8x8 sprites, tiles t, t + 1, ... row by row,
-// attributes pr[k] | or_, clipped per sprite as spr_put (no win_cut) and from cut_ly down:
+// attributes pr[k] | or_, clipped per sprite as spr_put and from cut_ly down:
 // one call for a menu card's 12. DE = x, BC = y; t, pr, or_, w, h on the stack (callee pops).
 static uint8_t sg_xs[8], sg_t, sg_or, sg_w, sg_h, sg_cnt, sg_lim, sg_y;
 static uint8_t *sg_pr;
@@ -1672,18 +1672,6 @@ void spr_put(int16_t x, int16_t y, uint8_t tile, uint8_t prop) __naked {
     cp  a, #160
     jr  nc, 9$
     ld  d, l
-    ; hidden under the score panel window?
-    ld  a, (_win_cut)
-    or  a, a
-    jr  z, 5$
-    ld  b, a
-    ld  a, d
-    cp  a, b
-    jr  c, 5$
-    jr  z, 5$
-    cp  a, #128
-    jr  c, 9$
-5$:
     ldhl sp, #2
     ld  a, (hl+)
     ld  b, a
