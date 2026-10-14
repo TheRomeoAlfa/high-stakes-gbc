@@ -222,15 +222,15 @@ static uint8_t wind_shown = 255;   // the label under the winnings as drawn
 static void hud_winv(uint8_t dma) {
     canvas_t tmp;
     const canvas_t *c = hud_at(&CV_WINV, &tmp, dma);
-    cv_begin(c, 0);
-    cv_rprint(mlstr(wining_txt, 1), 52, 1, 3);
-    hud_out(c, dma);
-    if (wind_shown != losses_desc || !dma) {   // (only when it changes: it rarely does)
-        wind_shown = losses_desc;
-        cv_begin(&CV_WIND, 0);
+    if (wind_shown != losses_desc || !dma) {   // (only when it changes: it rarely does; first,
+        wind_shown = losses_desc;                //  as it draws in cvbuf, where the number's
+        cv_begin(&CV_WIND, 0);                   //  DMA reads)
         cv_rprint(losses_desc ? "losses" : "winnings", 52, 1, 1);
         cv_draw(&CV_WIND);
     }
+    cv_begin(c, 0);
+    cv_rprint(mlstr(wining_txt, 1), 52, 1, 3);
+    hud_out(c, dma);
 }
 
 static int16_t hidcount(void) {
@@ -958,13 +958,18 @@ void game_frame(void) BANKED {
         if (hud_pend & HP_PASS) { hud_pend &= ~HP_PASS; hud_pass_draw(); }
         else if (hud_pend & HP_BONUS) { hud_pend &= ~HP_BONUS; hud_bonus_draw(); }
         else if (!dma_free) ;   // a counter's last DMA still waits: its buffer stays as it is
-        else if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(1); }
-        else if (hud_pend & HP_WINV) { hud_pend &= ~HP_WINV; hud_winv(1); }
-        else if (hud_pend & HP_WINS) { hud_pend &= ~HP_WINS; hud_wins(1); }
-        else { hud_pend &= ~HP_ROUND; hud_round(1); }
+        else {
+            dma_free = 2;   // a counter queued for DMA from cvbuf: nothing may draw there now
+            if (hud_pend & HP_STAKES) { hud_pend &= ~HP_STAKES; hud_stakes(1); }
+            else if (hud_pend & HP_WINV) { hud_pend &= ~HP_WINV; hud_winv(1); }
+            else if (hud_pend & HP_WINS) { hud_pend &= ~HP_WINS; hud_wins(1); }
+            else { hud_pend &= ~HP_ROUND; hud_round(1); }
+        }
     }
     help_busy = 0;
-    bonus_place();
+    // (the stake's BG box is drawn in cvbuf too: the frame after, or the counter's tiles
+    // would go up with pieces of the box in them)
+    if (dma_free != 2) bonus_place();
 #ifdef DEBUG_FPS
     if ((frames & 63) == 0) {
         cv_begin(&CV_STLBL, 0);
