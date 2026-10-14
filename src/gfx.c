@@ -1827,12 +1827,14 @@ void screen_on(void) {
 void clear_bg(void) {
     vq_n = vd_n = 0;
     cv_invalidate();
-    // rows 0-17 of both maps are contiguous 32-byte rows
+    // the window's rows 0-17; all 32 of the BG's: a screen shake scrolls rows 18 and 31 into
+    // view, and what other scenes left there (tile 0 of VRAM bank 1, card graphics in the
+    // game) showed as a red line along the edge
     VBK_REG = 1;
-    vram_fill((uint8_t *)0x9800u, 0, 32 * 18);
+    vram_fill((uint8_t *)0x9800u, 0, 32 * 32);
     vram_fill((uint8_t *)0x9C00u, 0, 32 * 18);
     VBK_REG = 0;
-    vram_fill((uint8_t *)0x9800u, 0, 32 * 18);
+    vram_fill((uint8_t *)0x9800u, 0, 32 * 32);
     vram_fill((uint8_t *)0x9C00u, 0, 32 * 18);
 }
 
