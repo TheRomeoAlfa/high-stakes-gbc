@@ -299,13 +299,14 @@ void wave_prep_title(const uint8_t *src, uint8_t c0, uint8_t n) BANKED {
     wv_cols_done = c0 + n;
 }
 
-// band colours: black, gray, red, purple (palette 0 keeps black and red); the nearest band
-// colour for BG palette entries i0..i0 + n - 1
+// band colours: black, the card back's pink, red, purple (palette 0 keeps black and red;
+// the face cards' gray is only in their number boxes, never on the band's lines); the
+// nearest band colour for BG palette entries i0..i0 + n - 1
 void wave_prep_lut(uint8_t i0, uint8_t n) BANKED {
     uint16_t bc[4];
     uint8_t i, k;
     bc[0] = bgpal[0];
-    bc[1] = bgpal[4 + 3];
+    bc[1] = bgpal[2 * 4 + 3];
     bc[2] = bgpal[2];
     bc[3] = bgpal[4 + 2];
     if (!i0)
