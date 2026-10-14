@@ -834,16 +834,17 @@ static void draw_sprites(void) {
                 spr_put(bx + i * 8, 10, BONUS_TILE + i * 2, bonus_rend[1] ? SPRPAL_PFLOCK : SPRPAL_STAKE);
     }
     {   // cards flying in (dealing)
-        uint8_t k;
-        int16_t x, y;
+        uint8_t k, r, c, t;
+        int16_t x, y, px, py;
         for (k = 0; k < 9; k++) {
             if (cards[k].ani != 2 || !cards[k].t) continue;
             x = fx[k] >> 4;
             y = (fy[k] >> 4) - (fz[k] >> 8);
-            for (i = 0; i < 6; i++) {
-                int16_t py = y + (i / 3) * 16, px = x + (i % 3) * 8;
-                if (py > -16 && px > -8 && px < 168)
-                    spr_put(px, py, SPR_CARDBACK + i * 2, SPRPAL_CARDBACK);
+            t = SPR_CARDBACK;
+            for (r = 0, py = y; r < 2; r++, py += 16) {
+                if (py <= -16) { t += 6; continue; }
+                for (c = 0, px = x; c < 3; c++, px += 8, t += 2)
+                    if (px > -8 && px < 168) spr_put(px, py, t, SPRPAL_CARDBACK);
             }
         }
     }
