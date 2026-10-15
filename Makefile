@@ -13,8 +13,9 @@ GEN = src/gen/assets0.c src/gen/assetsb.c src/gen/lift0.c src/gen/lift1.c src/ge
 SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/lift.c src/wave.c src/save.c src/score.c src/fade.c src/deal.c src/ripple.c src/dmg.c src/ending.c src/chips.c $(GEN)
 OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
 ROM = build/highstakes.gbc
-# the title screen's version: the latest git tag (tag a release, then build it)
-VERSION := $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
+# the title screen's version: the latest git tag's major part, v2.0 -> v2 (tag a release,
+# then build it)
+VERSION := $(shell (git describe --tags --abbrev=0 2>/dev/null || echo dev) | sed 's/\..*//')
 
 all: $(ROM)
 
