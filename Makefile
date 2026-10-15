@@ -13,11 +13,19 @@ GEN = src/gen/assets0.c src/gen/assetsb.c src/gen/lift0.c src/gen/lift1.c src/ge
 SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/lift.c src/wave.c src/save.c src/score.c src/fade.c src/deal.c src/ripple.c src/dmg.c src/ending.c src/chips.c $(GEN)
 OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
 ROM = build/highstakes.gbc
+# the title screen's version: the latest git tag (tag a release, then build it)
+VERSION := $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
 
 all: $(ROM)
 
 src/gen/assets.h $(GEN): tools/gen_assets.py tools/p8cart.py assets/highstakes.p8.png
 	$(PYTHON) tools/gen_assets.py
+
+# rewritten only when the tag changes, so scenes.c rebuilds only then
+src/gen/version.h: FORCE
+	@echo '#define GAME_VERSION "$(VERSION)"' | cmp -s - $@ || echo '#define GAME_VERSION "$(VERSION)"' > $@
+
+build/obj/scenes.o: src/gen/version.h
 
 build/obj/gfx.o build/obj/sound.o build/obj/lift.o build/obj/wave.o: CFLAGS += $(FASTFLAGS)
 
@@ -32,4 +40,5 @@ $(ROM): $(OBJ)
 clean:
 	rm -rf build/obj $(ROM)
 
-.PHONY: all clean
+.PHONY: all clean FORCE
+FORCE:

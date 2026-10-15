@@ -76,6 +76,8 @@ make GBDK=~/tools/gbdk
 
 `make` regenerates `src/gen/` from `assets/highstakes.p8.png` when the converter changes.
 Graphics previews are written to `build/preview/`.
+The title screen's version is the latest git tag: for a release, tag it (`git tag -a v2.1`)
+and then build.
 
 To play on a Chromatic, copy `build/highstakes.gbc` to a GBC flash cartridge.
 
