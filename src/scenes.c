@@ -371,7 +371,7 @@ void scene_start(void) BANKED {
             s_begin(); s_num((int16_t)(dbg_loops & 0x7FFF)); s_str("/"); s_num((int16_t)(sys_time & 0x7FFF));
             cv_print(s_end(), 2, 33, 1);
 #else
-            cv_print("gb v1", 2, 33, 3);
+            cv_print("gb v2", 2, 33, 3);
 #endif
             cv_draw(&bar);
             redraw = 0;
