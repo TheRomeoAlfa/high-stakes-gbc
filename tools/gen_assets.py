@@ -1227,7 +1227,7 @@ def main():
     aud_arr('pitch_tab', ptab, 'uint16_t')
     ntab = []
     for p in range(64):
-        f = 440 * 2 ** ((p - 33) / 12) * 24
+        f = 440 * 2 ** ((p - 33) / 12) * 12   # (an octave lower matches PICO-8's darker noise)
         best = None
         for s in range(14):
             for r in range(8):
@@ -1238,6 +1238,105 @@ def main():
                     best = (e, (s << 4) | r)
         ntab.append(best[1])
     aud_arr('noise_tab', ntab)
+    # noise loudness by pitch (the channel gain, x/16): PICO-8's noise is about 8 dB quieter
+    # from pitch 0 to 30, then rises evenly to full at 62 (measured from PICO-8's output);
+    # the GB's is as loud at every pitch
+    aud_arr('noise_gain', [round(15 * 10 ** ((-8 if p <= 30 else -8 + 8 * (p - 30) / 32) / 20))
+                           for p in range(64)])
+    # the bass (music channel 0 on the GB wave channel): PICO-8's waveforms as full-range
+    # 32-sample wave tables, and per music pattern the waveform its song's bass mostly uses
+    # (custom instruments count as their own notes' waveforms). The table changes only
+    # when a song starts: rewriting wave RAM needs the channel's DAC off, a click.
+    def p8wave(w, t):
+        if w == 1:
+            return 2 * t / 0.9 - 1 if t < 0.9 else 2 * (1 - t) / 0.1 - 1
+        if w == 2:
+            return t * 2 - 1
+        if w == 3:
+            return 1 if t < 0.5 else -1
+        if w == 4:
+            return 1 if t < 1 / 3 else -1
+        if w == 5:
+            return (3 - abs(24 * t - 6) if t < 0.5 else 1 - abs(16 * t - 12)) / 3
+        if w == 7:
+            return (abs(2 * ((t * 127 / 128) % 1) - 1) + abs(2 * ((t * 1.007) % 1) - 1) - 1)
+        return abs(4 * t - 2) - 1   # 0 triangle (6, noise, too)
+    # PICO-8's output rolls a 65 Hz bass's harmonics off above the 5th (measured: -5 dB at
+    # the 5th, -15 at the 7th, -20 at the 10th), the GB's wave channel doesn't: the tables
+    # are rebuilt from their harmonics through that roll-off, so the bass isn't thin and buzzy
+    bw = []
+    import cmath
+    for w in range(8):
+        fine = [p8wave(w, i / 256) for i in range(256)]
+        hs = [sum(fine[i] * cmath.exp(-2j * math.pi * n * i / 256) for i in range(256)) / 128
+              for n in range(1, 16)]
+        sm = []
+        for i in range(32):
+            t = (i + 0.5) / 32
+            sm.append(sum((h * cmath.exp(2j * math.pi * (n + 1) * t)).real / math.sqrt(1 + ((n + 1) / 4.5) ** 6)
+                          for n, h in enumerate(hs)))
+        lo, hi = min(sm), max(sm)
+        q = [max(0, min(15, round((v - lo) / (hi - lo) * 15))) for v in sm]
+        bw += [(q[i] << 4) | q[i + 1] for i in range(0, 32, 2)]
+    aud_arr('bass_waves', bw)
+
+    def song_wave(n):
+        wt = [0] * 8
+        seen = set()
+        while 0 <= n < 64 and n not in seen:
+            seen.add(n)
+            m = ROM[0x3100 + n * 4:0x3104 + n * 4]
+            if not m[0] & 0x40:
+                sx = ROM[0x3200 + (m[0] & 63) * 68:][:64]
+                for i in range(32):
+                    lo, hi = sx[i * 2], sx[i * 2 + 1]
+                    w, v = ((lo >> 6) | (hi << 2)) & 7, (hi >> 1) & 7
+                    if not v:
+                        continue
+                    if hi & 0x80:   # an instrument: its notes
+                        ix = ROM[0x3200 + w * 68:][:64]
+                        for k in range(32):
+                            il, ih = ix[k * 2], ix[k * 2 + 1]
+                            wt[((il >> 6) | (ih << 2)) & 7] += v * ((ih >> 1) & 7) / 7
+                    else:
+                        wt[w] += v
+            if m[1] & 0x80 or m[2] & 0x80:
+                break
+            n += 1
+        return max(range(8), key=lambda w: wt[w]) if any(wt) else 0
+    aud_arr('p8_music_wave', [song_wave(n) for n in range(64)])
+    # each custom instrument's volume shape for the GB's hardware envelope, which runs one
+    # way from a note's start: its peak volume in the first frame and its average change a
+    # frame over the next 8 (8.8), so a plucked instrument decays instead of holding flat
+    ipk, isl = [], []
+    for i in range(8):
+        ix = ROM[0x3200 + i * 68:][:68]
+        spd = max(1, ix[65])
+        ls, le = ix[66], ix[67]
+
+        def ivol(ticks):
+            k, f = int(ticks // spd), (ticks % spd) / spd
+            if ls < le:
+                while k >= le:
+                    k -= le - ls
+            if k >= 32:
+                return 0.0
+            lo, hi = ix[k * 2], ix[k * 2 + 1]
+            v, fx = (hi >> 1) & 7, (hi >> 4) & 7
+            return v * (f if fx == 4 else 1 - f if fx == 5 else 1)
+        tpf = 22050 / 59.7275 / 183      # PICO-8 ticks a GB frame
+        fr = [max(ivol(t * tpf + d) for d in (0, 0.5, 1)) for t in range(10)]
+        pk = max(fr[0], fr[1])
+        p0 = 0 if fr[0] >= fr[1] else 1
+        ys = fr[p0:p0 + 9]
+        n = len(ys)
+        mx, my = (n - 1) / 2, sum(ys) / n
+        sl = sum((x - mx) * (y - my) for x, y in enumerate(ys)) / sum((x - mx) ** 2 for x in range(n))
+        ipk.append(round(pk * 32))                    # volume << 5 (0..224)
+        isl.append(max(-127, min(127, round(sl * 32))))   # change a frame, << 5
+    aud_arr('inst_peak', ipk)
+    aud_arr('inst_slope', [v & 0xFF for v in isl])
+    print('instrument peaks', [v / 32 for v in ipk], 'slopes', [v / 32 for v in isl])
     # loudness compression: PICO-8 mixes in float, the GB has 15 volume steps per
     # channel, so quiet parts would round to silence. Map linear amplitude
     # (vol*16, 0..240, indexed by /4) through a square-root curve.

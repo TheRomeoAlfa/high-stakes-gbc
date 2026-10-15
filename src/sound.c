@@ -70,6 +70,7 @@ int8_t snd_gdv;
 static int8_t pat = -1;
 static uint8_t lvlmask = 0x0F;
 uint8_t leader;
+uint8_t vs_vi;   // the voice voice_seq works on
 static uint8_t sfxnext;
 
 // per-GB-channel state
@@ -81,28 +82,16 @@ uint8_t hwvol[4];        // simulated hardware level * 16
 int8_t hwstep[4];        // simulated envelope change per frame
 uint8_t wave_loaded = 255, wave_level = 255, wave_hold, wave_quiet;
 
-// wave-channel (bass) waveforms, scaled to 70% amplitude around the midpoint
-// so the bass doesn't dominate or distort small speakers
-const uint8_t waves[7][16] = {
-    {0x23,0x44,0x56,0x67,0x89,0x9A,0xBB,0xCD,0xDC,0xBB,0xA9,0x98,0x76,0x65,0x44,0x32}, // tri
-    {0x23,0x44,0x56,0x67,0x89,0x9A,0xBB,0xCD,0xDB,0xA9,0x76,0x43,0x22,0x22,0x22,0x22}, // tilted saw
-    {0x22,0x33,0x44,0x44,0x55,0x66,0x66,0x77,0x88,0x99,0x99,0xAA,0xBB,0xBB,0xCC,0xDD}, // saw
-    {0xDD,0xDD,0xDD,0xDD,0xDD,0xDD,0xDD,0xDD,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22}, // square
-    {0xDD,0xDD,0xDD,0xDD,0xDD,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22,0x22}, // pulse
-    {0x8A,0xBC,0xCC,0xBA,0x86,0x54,0x45,0x68,0x99,0x99,0x97,0x65,0x44,0x56,0x89,0xAB}, // organ
-    {0x34,0x45,0x66,0x78,0x99,0xAB,0xBC,0xDD,0xDC,0xBB,0xA9,0x98,0x76,0x65,0x44,0x33}, // phaser (soft)
-};
+// the bass's wave table: bass_waves[wave_sel] (gen_assets.py), chosen per song by music()
+uint8_t wave_sel;
 // pulse duty per PICO-8 waveform: 0=12.5% 1=25% 2=50% (50% has the fewest harmonics)
 const uint8_t duty_of[8] = {2, 2, 1, 2, 1, 2, 2, 1};
 // mix balance per GB channel (x/16): PICO-8's mix is bass heavy, GB pulses/noise are bright
 #ifndef GAIN_PULSE
 #define GAIN_PULSE 10
 #endif
-#ifndef GAIN_NOISE
-#define GAIN_NOISE 7
-#endif
 // relative loudness of PICO-8 waveforms vs a GB pulse/wave at the same level (x/16)
-const uint8_t wloud[8] = {13, 13, 12, 10, 11, 13, 9, 12};
+const uint8_t wloud[8] = {13, 13, 12, 10, 11, 13, 15, 12};
 // hardware envelope: change per frame (vol*16 units) for periods 1..7 (1 step = 1/64 s)
 const uint8_t envstep[8] = {0, 17, 9, 6, 4, 3, 3, 2};
 const int8_t vib[8] = {-4, -2, 0, 2, 4, 2, 0, -2};
@@ -159,6 +148,9 @@ static void voice_start(uint8_t v, uint8_t n) {
     p->n.vol = 0;
     p->n.pitch = 0;
     p->ov = 0;
+    // its first frame plays the first note's start (seq_tick adds a frame before the note
+    // check): otherwise notes shorter than a frame, like the one-tick clicks, never sound
+    p->sq.acc -= 256;
 }
 
 static void start_pattern(int8_t n) {
@@ -178,8 +170,11 @@ static void start_pattern(int8_t n) {
     if (lead == 255) pat = -1;
 }
 
+// called by the leading voice (vs_vi) as its pattern ends, partway through snd_update
 void next_pattern(void) {
     int8_t n = pat;
+    uint8_t c, l = vs_vi;
+    uint16_t r = V[l].sq.acc;   // how far this frame is past the pattern's end
     if (p8_music[n * 4 + 1] & 0x80) {
         while (n > 0 && !(p8_music[n * 4] & 0x80)) n--;
     } else if (p8_music[n * 4 + 2] & 0x80) {
@@ -194,6 +189,10 @@ void next_pattern(void) {
         return;
     }
     start_pattern(n);
+    // keep the voices in step: the ones after the leader still run this frame, the leader
+    // and those before it next frame
+    for (c = 0; c < 4; c++)
+        V[c].sq.acc += (c <= l) ? r + 256 : r;
 }
 
 void music(int8_t n) BANKED {
@@ -201,6 +200,11 @@ void music(int8_t n) BANKED {
         pat = -1;
         V[0].on = V[1].on = V[2].on = V[3].on = 0;
     } else {
+        // the song's bass waveform: reloaded (and the channel restarted) only on a change
+        if (p8_music_wave[n] != wave_sel) {
+            wave_sel = p8_music_wave[n];
+            wave_loaded = 255;
+        }
         start_pattern(n);
     }
 }
@@ -277,7 +281,6 @@ OFFCHK(note_t, vacc, NO_VACC); OFFCHK(note_t, vstep, NO_VSTEP); OFFCHK(note_t, a
 OFFCHK(seq_t, acc, 5); OFFCHK(seq_t, dur, 7); OFFCHK(seq_t, done, SQ_DONE);
 typedef char chk_voice_size[(sizeof(voice_t) == 79) ? 1 : -1];
 
-uint8_t vs_vi;   // the voice voice_seq works on
 
 // ---- a note starting, in assembly. q (seq_t) in HL for the sequence routines.
 
@@ -376,6 +379,21 @@ _snd_seqstep:
     inc hl
     inc hl
     ld  (hl), b             ; idx
+    ; notes shorter than a frame: of those starting this frame, the loudest plays (the
+    ; latest of equals), so a fast sfx's accent isn't lost between two frames
+    ldhl sp, #2
+    ld  a, (hl)             ; started
+    or  a, a
+    jr  z, 4$
+    ldhl sp, #4
+    ld  a, (hl)             ; its hi: volume in bits 1-3
+    and a, #0x0E
+    ld  c, a
+    ld  a, e
+    and a, #0x0E
+    cp  a, c
+    jr  c, 1$               ; quieter: keep the earlier one
+4$:
     ldhl sp, #2
     ld  (hl), #1
     inc hl
@@ -729,7 +747,7 @@ _snd_notestart:
     add hl, bc
     ld  (hl), #2
     jp  99$
-30$:                        ; 3: drop: pacc = pbase << 4, pstep = -((pbase << 4) / nd)
+30$:                        ; 3: drop: pacc = pbase << 4, pstep = -((24 << 8) / nd)
     ldhl sp, #4
     ld  a, (hl+)
     ld  h, (hl)
@@ -754,9 +772,8 @@ _snd_notestart:
     pop af
     pop hl
     push hl
-    ld  h, a
-    ld  l, #0
-    call _snd_udiv
+    ld  hl, #(24 << 8)      ; two octaves over the note (PICO-8's falls in frequency to 0:
+    call _snd_udiv          ; an octave by half way, two by three quarters)
     xor a, a
     sub a, l
     ld  c, a
@@ -1521,12 +1538,82 @@ _snd_mul8:
     __endasm;
 }
 
+// HL = p, DE = its instrument's volume (8.8): when the note starts this frame (the channel
+// retriggers, setting its hardware envelope), DE = the instrument's peak instead and the
+// caller's frame 8-9 = that a frame on (inst_peak, inst_slope); else frame 9 = 0xFF. Keeps HL.
+void snd_shapes(void) __naked {
+    __asm
+_snd_ihint:
+    push hl
+    inc hl
+    inc hl
+    inc hl
+    ld  a, (hl)             ; newnote
+    or  a, a
+    jr  z, 1$
+    ld  bc, #(VO_N + NO_WAVE - VO_NEWNOTE)
+    add hl, bc
+    ld  a, (hl)             ; the instrument
+    and a, #7
+    ld  c, a
+    ld  b, #0
+    ld  hl, #_inst_slope
+    add hl, bc
+    ld  a, (hl)
+    ld  hl, #_inst_peak
+    add hl, bc
+    ld  e, (hl)             ; peak << 5
+    ld  c, a                ; BC = slope << 3, sign extended
+    rla
+    sbc a, a
+    ld  b, a
+    sla c
+    rl  b
+    sla c
+    rl  b
+    sla c
+    rl  b
+    ld  d, #0               ; DE = peak << 8
+    sla e
+    rl  d
+    sla e
+    rl  d
+    sla e
+    rl  d
+    ld  h, d
+    ld  l, e
+    add hl, bc              ; a frame on, kept to 0..7 << 8
+    bit 7, h
+    jr  z, 2$
+    ld  hl, #0
+2$:
+    ld  a, h
+    cp  a, #7
+    jr  c, 3$
+    ld  hl, #0x0700
+3$:
+    ld  b, h
+    ld  c, l
+    ldhl sp, #12            ; the caller's 8 (the return address, the push)
+    ld  (hl), c
+    inc hl
+    ld  (hl), b
+    pop hl
+    ret
+1$:
+    ldhl sp, #13
+    ld  (hl), #0xFF
+    pop hl
+    ret
+    __endasm;
+}
+
 // p in DE: pitch (op), level (ov), its change (odv) and waveform (ow) for this frame.
 // Stack frame: 0-1 p, 2-3 pitch, 4 vol_comp[nv], 5 vol_comp[ov], 6 ov, 7 spare.
 void snd_voice_render(voice_t *p) __naked {
     (void)p;
     __asm
-    add sp, #-8
+    add sp, #-10
     ldhl sp, #0
     ld  (hl), e
     inc hl
@@ -1592,6 +1679,7 @@ void snd_voice_render(voice_t *p) __naked {
     inc hl
     ld  d, (hl)
     pop hl
+    call _snd_ihint         ; a note starting: the instrument's shape
     ld  bc, #(VO_N + NO_VACC)
     add hl, bc
     ld  c, (hl)
@@ -1611,6 +1699,16 @@ void snd_voice_render(voice_t *p) __naked {
     ld  (hl), c
     inc hl
     ld  (hl), b
+    ldhl sp, #9             ; or the shape's, a frame on
+    ld  a, (hl-)
+    cp  a, #0xFF
+    jr  z, 21$
+    ld  c, (hl)
+    ldhl sp, #4
+    ld  (hl), c
+    inc hl
+    ld  (hl), a
+21$:
     ldhl sp, #0             ; the note s
     ld  a, (hl+)
     ld  h, (hl)
@@ -1652,6 +1750,38 @@ void snd_voice_render(voice_t *p) __naked {
     ld  (hl), a
     call _snd_mixn          ; A = nv, from the volume after
 30$:
+    ; notes shorter than a frame (speed 1) last a whole frame here, twice PICO-8's
+    ; length: 4 dB down (x 5/8) so the quick clicks aren't louder than the original's
+    ld  c, a
+    ldhl sp, #0
+    ld  a, (hl+)
+    ld  h, (hl)
+    ld  l, a
+    ld  de, #(VO_SQ + 7)
+    add hl, de
+    ld  a, (hl+)            ; sq.dur: under 200 (of 256 a frame) is speed 1
+    cp  a, #200
+    ld  a, (hl)
+    ccf
+    adc a, #0               ; (high byte + 1 when the low byte is 200 or more)
+    ld  a, c
+    jr  nz, 34$
+    srl a
+    ld  c, a
+    srl a
+    srl a
+    add a, c                ; nv * 5/8
+    ld  c, a
+    ldhl sp, #6
+    ld  a, (hl)
+    srl a
+    ld  b, a
+    srl a
+    srl a
+    add a, b
+    ld  (hl), a             ; ov * 5/8
+    ld  a, c
+34$:
     ; A = nv. Perceptual compression, then the waveform s loudness:
     ; ov = vol_comp[ov >> 2] * w >> 4, odv = (int8)((vol_comp[nv >> 2] - that) * w >> 4)
     rra
@@ -1739,14 +1869,19 @@ void snd_voice_render(voice_t *p) __naked {
     ld  a, l
     ldhl sp, #7
     ld  (hl), a             ; [7] odv
-    ; op = max(pitch, 0), then ov, odv
+    ; op = max(pitch, -12 * 16), then ov, odv
     ldhl sp, #2
     ld  a, (hl+)
     ld  c, a
     ld  b, (hl)
-    bit 7, b
+    bit 7, b                ; at least -12 (the wave channel's lowest, 32 Hz)
     jr  z, 33$
-    ld  bc, #0
+    ld  a, c
+    cp  a, #<(-192)
+    ld  a, b
+    sbc a, #>(-192)
+    jr  nc, 33$
+    ld  bc, #-192
 33$:
     ldhl sp, #6
     ld  a, (hl+)
@@ -1767,7 +1902,7 @@ void snd_voice_render(voice_t *p) __naked {
     ld  (hl), d             ; ov
     inc hl
     ld  (hl), e             ; odv
-    add sp, #8
+    add sp, #10
     ret
     __endasm;
 }
@@ -2180,9 +2315,11 @@ _snd_env:
     ld  a, b
     ret
 
-; HL = p16 (pitch * 16, >= 0), A = 12 for an octave up: BC = the GB frequency. Clobbers DE.
+; HL = p16 (pitch * 16, >= -192), A = 12 for an octave up: BC = the GB frequency. Clobbers DE.
 _snd_freq:
     ld  d, a
+    ld  bc, #192            ; (pitch + 12) * 16 >= 0
+    add hl, bc
     ld  a, l
     and a, #15
     ld  (_snd_ff), a        ; f
@@ -2196,8 +2333,7 @@ _snd_freq:
     srl h
     rr  l
     ld  a, l
-    add a, #12
-    add a, d                ; i, in 8 bits as freq_of
+    add a, d                ; i = pitch + 12 + A, in 8 bits as freq_of
     cp  a, #107
     jr  c, 1$
     ld  a, #107
@@ -2451,6 +2587,10 @@ _snd_noise_out:
     ld  a, (hl+)
     ld  h, (hl)
     ld  l, a
+    bit 7, h                ; (below pitch 0: 0)
+    jr  z, 1$
+    ld  hl, #0
+1$:
     srl h
     rr  l
     srl h
@@ -2468,8 +2608,10 @@ _snd_noise_out:
     ld  a, (hl)
     ldhl sp, #5             ; [3] (the push moved sp)
     ld  (hl), a
+    ld  hl, #_noise_gain    ; its gain, by pitch
+    add hl, bc
+    ld  a, (hl)
     pop hl
-    ld  a, #GAIN_NOISE
     call _snd_gain
     ld  e, #3
     call _snd_hwtick
@@ -2504,7 +2646,7 @@ _snd_noise_out:
     add sp, #4
     ret
 
-; the wave channel (the bass): 4 output levels, changed without a retrigger, with hysteresis
+; the wave channel (the bass): 100% / 50% / off, changed without a retrigger, with hysteresis
 ; and held 4 frames (each change shifts its DC offset: a click). Frame: 0-1 p, 2 trig,
 ; 3 level, 4-5 fr.
 _snd_wave_out:
@@ -2547,14 +2689,14 @@ _snd_wave_out:
     jr  z, 3$
     inc a
     jr  nz, 4$
-3$:                         ; off or unset: on above 40, loud above 120
+3$:                         ; off or unset: on above 40 at 50%, above 120 at 100%
     ld  a, c
     cp  a, #41
     jr  c, 7$
-    ld  b, #3
+    ld  b, #2
     cp  a, #121
     jr  c, 7$
-    ld  b, #2
+    ld  b, #1
     jr  7$
 4$:
     ld  a, c
@@ -2563,27 +2705,26 @@ _snd_wave_out:
     ld  a, (_wave_quiet)    ; quiet: low level through short gaps, off after 12 frames
     inc a
     ld  (_wave_quiet), a
-    ld  b, #3
+    ld  b, #2
     cp  a, #13
     jr  c, 7$
     ld  b, #0
     jr  7$
-5$:
+5$:                         ; two levels, 100% and 50%, changed past a margin (each change
+                            ; shifts the DC offset: a click)
     ld  a, (_wave_level)
-    cp  a, #3
-    jr  nz, 6$
+    cp  a, #2
+    jr  nz, 61$
     ld  a, c
     cp  a, #141
     jr  c, 7$
-    ld  b, #2
+    ld  b, #1
     jr  7$
-6$:
-    cp  a, #2
-    jr  nz, 7$
+61$:
     ld  a, c
     cp  a, #90
     jr  nc, 7$
-    ld  b, #3
+    ld  b, #2
 7$:
     ld  a, (_wave_level)
     cp  a, b
@@ -2637,7 +2778,12 @@ _snd_wave_out:
     jr  nz, 12$
     xor a, a
     ldh (_NR30_REG + 0), a
-    ld  hl, #_waves
+    ld  a, (_wave_sel)
+    swap a                  ; * 16
+    ld  e, a
+    ld  d, #0
+    ld  hl, #_bass_waves
+    add hl, de
     ld  de, #_AUD3WAVE
     ld  b, #16
 11$:
