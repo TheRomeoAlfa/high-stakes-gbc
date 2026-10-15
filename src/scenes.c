@@ -1266,6 +1266,9 @@ void scene_wining(void) BANKED {
             map_put(1, 0, 0, 20, 1, row, at);
         }
         strip_draw(0);
+        // and now: its queued copy can find the queue full after this setup and be dropped,
+        // leaving the last screen's tiles ("ROUND LOST") along the bar's top until it ripples
+        bkg_tiles_upload(STRIP_TILE, 12, strip);
         rings_update(0);
         screen_on();
         for (;;) {
