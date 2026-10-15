@@ -12,9 +12,7 @@ GEN = src/gen/assets0.c src/gen/assetsb.c src/gen/lift0.c src/gen/lift1.c src/ge
       $(patsubst %,src/gen/liftp%.c,0 1 2 3 4 5 6) $(patsubst %,src/gen/rings%.c,0 1 2 3 4 5 6 7 8 9 10 11 12 13 14)
 SRC = src/main.c src/gfx.c src/sound.c src/game.c src/scenes.c src/lift.c src/wave.c src/save.c src/score.c src/fade.c src/deal.c src/ripple.c src/dmg.c src/ending.c src/chips.c $(GEN)
 OBJ = $(patsubst src/%.c,build/obj/%.o,$(SRC))
-# linked as build/highstakes.gbc (its .map and .noi alongside), shipped as "High Stakes.gbc"
 ROM = build/highstakes.gbc
-FINAL = build/High Stakes.gbc
 
 all: $(ROM)
 
@@ -30,9 +28,8 @@ build/obj/%.o: src/%.c src/gen/assets.h src/*.h
 $(ROM): $(OBJ)
 	$(LCC) $(LCCFLAGS) -o $@ $(OBJ)
 	$(PYTHON) tools/check_rom.py build/highstakes.map build/highstakes.noi
-	cp $@ "$(FINAL)"
 
 clean:
-	rm -rf build/obj $(ROM) "$(FINAL)"
+	rm -rf build/obj $(ROM)
 
 .PHONY: all clean
