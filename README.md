@@ -12,7 +12,7 @@ opponent from the original, with its music, redrawn for a 160x144 screen.
 
 ![screens](screenshots.png)
 
-The ROM is `build/highstakes.gbc` (256 KB, MBC5 + battery-backed SRAM, CGB-only).
+The ROM is `build/High Stakes.gbc` (512 KB, MBC5 + battery-backed SRAM, CGB-only).
 
 ## What's ported
 
@@ -77,7 +77,7 @@ make GBDK=~/tools/gbdk
 `make` regenerates `src/gen/` from `assets/highstakes.p8.png` when the converter changes.
 Graphics previews are written to `build/preview/`.
 
-To play on a Chromatic, copy `build/highstakes.gbc` to a GBC flash cartridge.
+To play on a Chromatic, copy `build/High Stakes.gbc` to a GBC flash cartridge.
 
 ## Layout
 
